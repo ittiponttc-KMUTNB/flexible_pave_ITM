@@ -676,3 +676,27 @@ def fig_to_bytes(fig: plt.Figure) -> bytes:
     fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
     buf.seek(0)
     return buf.read()
+
+# ============================================================
+# 9. W18–SN Mapping Table (สำหรับ JSON mode)
+# ============================================================
+
+# SN ที่ใช้คำนวณ mapping — ครอบคลุมช่วง Flexible จริง
+_SN_GRID = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5,
+            6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0]
+
+
+def compute_w18_sn_table(traffic_data: list, pt: float,
+                         lane_factor: float, direction_factor: float,
+                         sn_grid: list | None = None) -> list[dict]:
+    """
+    คำนวณ W18 ที่ SN แต่ละค่าใน sn_grid
+    return: list of {'SN': float, 'W18': int}
+    """
+    grid = sn_grid if sn_grid is not None else _SN_GRID
+    rows = []
+    for sn in grid:
+        w18, _ = compute_esal_flex(traffic_data, pt, lane_factor,
+                                   direction_factor, SN=sn)
+        rows.append({'SN': sn, 'W18': w18})
+    return rows
