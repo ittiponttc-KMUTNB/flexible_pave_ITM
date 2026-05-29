@@ -7,7 +7,10 @@ import math
 import numpy as np
 from io import BytesIO
 import matplotlib
-matplotlib.use('Agg')
+try:
+    matplotlib.use('Agg')
+except Exception:
+    pass
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
