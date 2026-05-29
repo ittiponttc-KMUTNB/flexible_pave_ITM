@@ -1,23 +1,7 @@
-# ============================================================
-# requirements.txt
-# Rigid & Flexible Pavement Design Tools — AASHTO 1993
-# ภาควิชาครุศาสตร์โยธา · มจพ.
-# ============================================================
- 
-# Core
 streamlit>=1.35.0
 numpy>=1.26.0
 pandas>=2.1.0
- 
-# Scientific (ใช้ใน Rigid engine — scipy.interpolate)
 scipy>=1.12.0
- 
-# Visualization
 matplotlib>=3.8.0
- 
-# Word Report (.docx)
 python-docx>=1.1.0
- 
-# Image (ใช้ใน Rigid V6 legacy)
 pillow>=10.2.0
- 
