@@ -52,31 +52,31 @@ def _hr(color='#FFCCBC'):
 
 
 # ============================================================
-# Design Parameter Summary Box
+# Design Parameter Summary Box — pure HTML (ไม่มี widget ข้างใน)
 # ============================================================
 def _param_summary(W18, reliability, Zr, So, delta_psi, pt):
     st.markdown(
         f'<div style="background:#E8F5E9;border:1.5px solid #A5D6A7;'
         f'border-radius:8px;padding:10px 14px;margin-top:6px">'
         f'<div style="font-size:12px;font-weight:700;color:#2E7D32;margin-bottom:8px">'
-        f'✅ พารามิเตอร์ออกแบบ → ส่งต่อ Tab 2 & 3</div>'
+        f'✅ พารามิเตอร์ออกแบบ → ส่งต่อ Tab 2 &amp; 3</div>'
         f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">'
         f'<div style="background:#FBE9E7;border-radius:7px;padding:8px;text-align:center">'
         f'<div style="font-size:10px;color:#78909C">W₁₈ (ESALs)</div>'
-        f'<div style="font-family:IBM Plex Mono,monospace;font-size:16px;font-weight:700;color:#BF360C">{W18:,.0f}</div>'
+        f'<div style="font-family:IBM Plex Mono,monospace;font-size:15px;font-weight:700;color:#BF360C">{W18:,.0f}</div>'
         f'</div>'
         f'<div style="background:#E3F2FD;border-radius:7px;padding:8px;text-align:center">'
         f'<div style="font-size:10px;color:#78909C">Reliability</div>'
-        f'<div style="font-family:IBM Plex Mono,monospace;font-size:16px;font-weight:700;color:#1565C0">{reliability}%</div>'
+        f'<div style="font-family:IBM Plex Mono,monospace;font-size:15px;font-weight:700;color:#1565C0">{reliability}%</div>'
         f'</div>'
         f'<div style="background:#E8F5E9;border-radius:7px;padding:8px;text-align:center">'
         f'<div style="font-size:10px;color:#78909C">Zr</div>'
-        f'<div style="font-family:IBM Plex Mono,monospace;font-size:16px;font-weight:700;color:#2E7D32">{Zr:.3f}</div>'
+        f'<div style="font-family:IBM Plex Mono,monospace;font-size:15px;font-weight:700;color:#2E7D32">{Zr:.3f}</div>'
         f'</div>'
         f'<div style="background:#F3E5F5;border-radius:7px;padding:8px;text-align:center">'
         f'<div style="font-size:10px;color:#78909C">ΔPSI</div>'
-        f'<div style="font-family:IBM Plex Mono,monospace;font-size:16px;font-weight:700;color:#6A1B9A">{delta_psi:.1f}</div>'
-        f'<div style="font-size:10px;color:#78909C">P₀={pt+delta_psi:.1f}→Pt={pt:.1f}</div>'
+        f'<div style="font-family:IBM Plex Mono,monospace;font-size:15px;font-weight:700;color:#6A1B9A">{delta_psi:.1f}</div>'
+        f'<div style="font-size:10px;color:#78909C">P₀={pt+delta_psi:.1f} → Pt={pt:.1f}</div>'
         f'</div>'
         f'</div></div>',
         unsafe_allow_html=True)
@@ -87,12 +87,19 @@ def _param_summary(W18, reliability, Zr, So, delta_psi, pt):
 # ============================================================
 def render_flex_tab1():
 
+    # ── apply pending values จาก JSON import (ก่อน widget render) ──
+    # ต้องทำตรงนี้ก่อน widget ใดๆ เพื่อหลีกเลี่ยง
+    # "cannot modify after widget instantiated"
+    if '_flex_w18_pending' in st.session_state:
+        st.session_state['flex_w18'] = st.session_state.pop('_flex_w18_pending')
+    if '_flex_pt_pending' in st.session_state:
+        st.session_state['flex_pt'] = st.session_state.pop('_flex_pt_pending')
+
     # ── ชื่อโครงการ ───────────────────────────────────────
     with st.container(border=True):
         _card_title('📋 ข้อมูลโครงการ')
         st.text_input(
             'ชื่อโครงการ',
-            value=st.session_state.get('flex_project_name', ''),
             key='flex_project_name',
             placeholder='เช่น ทางหลวงหมายเลข 304 ตอน นครราชสีมา-กบินทร์บุรี')
 
@@ -104,7 +111,6 @@ def render_flex_tab1():
             options=['manual', 'json'],
             format_func=lambda x: '✏️  กรอก W₁₈ ตรง (Manual)' if x == 'manual'
                                   else '📂  นำเข้าจาก ESAL Calculator (JSON)',
-            index=0 if st.session_state.get('flex_w18_mode', 'manual') == 'manual' else 1,
             key='flex_w18_mode',
             horizontal=True,
             label_visibility='collapsed',
@@ -220,7 +226,7 @@ def _render_manual_mode():
 
         st.markdown(
             '<div style="font-size:11px;color:#78909C;margin-top:4px">'
-            '📌 แนวทางกรมทางหลวง: ทางหลัก ≥ 1M · ทางรอง 0.5–1M · ทางเล็ก < 0.5M'
+            '📌 แนวทางกรมทางหลวง: ทางหลัก ≥ 1M · ทางรอง 0.5–1M · ทางเล็ก &lt; 0.5M'
             '</div>', unsafe_allow_html=True)
 
 
@@ -257,6 +263,11 @@ def _render_json_mode():
 
 
 def _process_esal_json(raw: dict, filename: str):
+    """validate + คำนวณ W18 จาก JSON
+    หมายเหตุ: ใช้ _pending keys เพื่อหลีกเลี่ยง
+    'cannot modify after widget instantiated'
+    render_flex_tab1() จะ apply ค่าเหล่านี้ก่อน widget render ในรอบถัดไป
+    """
     ptype = raw.get('pavement_type', '').lower()
     if ptype == 'rigid':
         st.warning('⚠️ ไฟล์นี้เป็น Rigid Pavement — W₁₈ จะถูกคำนวณใหม่สำหรับ Flexible')
@@ -289,8 +300,9 @@ def _process_esal_json(raw: dict, filename: str):
         'W18_computed':     W18_total,
         'truck_factors':    tf,
     }
-    st.session_state['flex_w18'] = float(W18_total)
-    st.session_state['flex_pt']  = pt_json
+    # pending → render_flex_tab1() apply ก่อน widget render
+    st.session_state['_flex_w18_pending'] = float(W18_total)
+    st.session_state['_flex_pt_pending']  = pt_json
     st.rerun()
 
 
@@ -377,7 +389,7 @@ def _show_esal_summary(ed: dict):
             f'font-weight:700;color:#BF360C">{w18_cur/1e6:.3f}M</div>'
             f'</div>', unsafe_allow_html=True)
 
-    if abs(st.session_state.get('flex_w18', W18) - W18) > 1000:
+    if abs(float(st.session_state.get('flex_w18', W18)) - W18) > 1000:
         st.caption(
             f'⚠️ W₁₈ ถูกแก้ไขจาก JSON ({W18:,.0f}) '
             f'เป็น {st.session_state["flex_w18"]:,.0f}')
