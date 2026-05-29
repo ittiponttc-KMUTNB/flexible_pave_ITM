@@ -1,19 +1,21 @@
 """
-flex_app.py — Flexible Pavement Design V1
-AASHTO 1993 — มาตรฐานกรมทางหลวง
+app.py — Rigid Pavement Design V7
+AASHTO 1993 — JPCP/JRCP & CRCP
 พัฒนาโดย รศ.ดร.อิทธิพล มีผล · ภาควิชาครุศาสตร์โยธา · มจพ.
 
-Run: streamlit run flex_app.py
+Run: streamlit run app.py
 """
 import streamlit as st
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
-from flex_tab1 import render_flex_tab1
+from tab1_traffic import render_tab1
+from tab2_subgrade import render_tab2
+from tab3_design import render_tab3
+from tab4_report import render_tab4
 
 # ============================================================
-# CSS — Theme เดียวกับ Rigid Pavement (app.py)
-# เพิ่ม accent สีส้ม (#E65100) สำหรับ Flexible
+# CSS
 # ============================================================
 CSS = """
 <style>
@@ -27,8 +29,8 @@ html, body, [data-testid="stAppViewContainer"] {
 [data-testid="stMainBlockContainer"] { padding-top: 0.5rem; }
 
 /* ── Header ── */
-.fp-header {
-    background: #BF360C;
+.rp-header {
+    background: #1565C0;
     border-radius: 10px;
     padding: 14px 20px 10px;
     margin-bottom: 12px;
@@ -36,16 +38,16 @@ html, body, [data-testid="stAppViewContainer"] {
     align-items: center;
     justify-content: space-between;
 }
-.fp-header-title {
+.rp-header-title {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 15px; color: #FFFFFF;
     font-weight: 600; letter-spacing: 0.05em;
 }
-.fp-header-sub {
+.rp-header-sub {
     font-family: 'IBM Plex Mono', monospace;
-    font-size: 11px; color: #FFCCBC; margin-top: 3px;
+    font-size: 11px; color: #BBDEFB; margin-top: 3px;
 }
-.fp-badge {
+.rp-badge {
     background: rgba(255,255,255,0.15);
     border: 1px solid rgba(255,255,255,0.3);
     border-radius: 6px; padding: 4px 12px;
@@ -53,48 +55,56 @@ html, body, [data-testid="stAppViewContainer"] {
     font-size: 11px; color: #FFFFFF;
 }
 
-/* ── Cards ── */
-.fp-card {
-    background: #FFF8E1;
-    border: 1px solid #FFECB3;
-    border-radius: 8px;
-    padding: 8px 12px;
-    margin-bottom: 6px;
+/* ── st.container(border=True) → rp-card style ── */
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    background: #FFFFFF !important;
+    border: none !important;
+    border-radius: 8px !important;
+    margin-bottom: 8px !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08) !important;
 }
-.fp-card-title {
-    font-size: 13px; font-weight: 600; color: #BF360C;
+div[data-testid="stVerticalBlockBorderWrapper"] > div {
+    background: #FFFFFF !important;
+    border: none !important;
+    border-radius: 8px !important;
+    padding: 10px 14px !important;
+}
+
+/* ── Card title ── */
+.rp-card-title {
+    font-size: 13px; font-weight: 600; color: #1565C0;
     margin-bottom: 10px; padding-bottom: 6px;
-    border-bottom: 1px solid #FFECB3;
+    border-bottom: 0.5px solid #E0E0E0;
 }
 
 /* ── Metrics ── */
-.fp-metric {
-    background: #FFF3CD;
-    border: 1px solid #FFECB3;
+.rp-metric {
+    background: #E3F2FD;
+    border: 0.5px solid #90CAF9;
     border-radius: 8px;
     padding: 8px 10px; text-align: center;
 }
-.fp-metric-label { font-size: 11px; color: #90A4AE; margin-bottom: 3px; }
-.fp-metric-val {
+.rp-metric-label { font-size: 11px; color: #546E7A; margin-bottom: 3px; }
+.rp-metric-val {
     font-family: 'IBM Plex Mono', monospace;
-    font-size: 18px; font-weight: 600; color: #BF360C;
+    font-size: 18px; font-weight: 600; color: #1565C0;
 }
 
 /* ── Status ── */
-.fp-status-ok {
+.rp-status-ok {
     background: #E8F5E9; border: 1px solid #A5D6A7;
     border-radius: 8px; padding: 7px 12px;
     font-size: 13px; color: #2E7D32; font-weight: 600;
 }
-.fp-status-fail {
-    background: #FFEBEE; border: 1px solid #EF9A9A;
+.rp-status-warn {
+    background: #FFF8E1; border: 1px solid #FFD54F;
     border-radius: 8px; padding: 7px 12px;
-    font-size: 13px; color: #C62828; font-weight: 600;
+    font-size: 13px; color: #E65100; font-weight: 600;
 }
-.fp-status-info {
-    background: #FBE9E7; border: 1px solid #FFAB91;
+.rp-status-info {
+    background: #E3F2FD; border: 1px solid #90CAF9;
     border-radius: 8px; padding: 7px 12px;
-    font-size: 13px; color: #BF360C;
+    font-size: 13px; color: #1565C0;
 }
 
 /* ── Tabs ── */
@@ -103,107 +113,78 @@ div[data-testid="stTabs"] button {
     font-size: 13px !important;
 }
 div[data-testid="stTabs"] button[aria-selected="true"] {
-    color: #BF360C !important;
-    border-bottom: 3px solid #BF360C !important;
+    color: #1565C0 !important;
+    border-bottom: 3px solid #1565C0 !important;
 }
 
 /* ── Section label ── */
-.fp-section-label {
+.rp-section-label {
     font-size: 11px; font-weight: 600; color: #90A4AE;
     letter-spacing: 0.07em; text-transform: uppercase;
     margin-bottom: 6px; margin-top: 8px;
 }
-
-/* ── Toggle badge ── */
-.fp-toggle-manual {
-    display:inline-block;
-    background:#FBE9E7;border:1.5px solid #BF360C;
-    border-radius:20px;padding:2px 12px;
-    font-size:12px;font-weight:700;color:#BF360C;
-    margin-bottom:6px;
-}
-.fp-toggle-json {
-    display:inline-block;
-    background:#E8F5E9;border:1.5px solid #2E7D32;
-    border-radius:20px;padding:2px 12px;
-    font-size:12px;font-weight:700;color:#2E7D32;
-    margin-bottom:6px;
-}
 </style>
 """
-
-# ============================================================
-# SESSION STATE DEFAULTS
-# ============================================================
-_DEFAULTS = {
-    # project
-    'flex_project_name': '',
-    # Tab 1
-    'flex_w18_mode':      'manual',   # 'manual' | 'json'
-    'flex_w18':           1_000_000.0,
-    'flex_reliability':   90,
-    'flex_so':            0.45,
-    'flex_p0':            4.2,
-    'flex_pt':            2.5,
-    'flex_esal_data':     None,
-    'flex_esal_file_id':  None,
-    # Tab 2
-    'flex_cbr':           4.0,
-    # Tab 3 (ใส่ default ไว้ก่อน)
-    'flex_calc_results':  None,
-    'flex_design_check':  None,
-}
 
 # ============================================================
 # MAIN
 # ============================================================
 def main():
     st.set_page_config(
-        page_title='Flexible Pavement Design V1 — AASHTO 1993',
-        page_icon='🛤️',
-        layout='wide',
+        page_title='Rigid Pavement Design V7 — AASHTO 1993',
+        page_icon='🛣️', layout='wide'
     )
     st.markdown(CSS, unsafe_allow_html=True)
 
-    # ── Session State Init ─────────────────────────────────
-    for k, v in _DEFAULTS.items():
+    # ── Session State Init ───────────────────────────────────
+    defaults = {
+        'project_name': '',
+        'esal_data': None, 'esal_file_id': None,
+        'cbr': 4.0, 'MR_psi': 6000,
+        'pt': 2.0, 'reliability': 90, 'so': 0.35,
+        'jpcp_k_inf': None, 'jpcp_k_eff': None, 'jpcp_ls': 1.0,
+        'crcp_k_inf': None, 'crcp_k_eff': None, 'crcp_ls': 1.0,
+        'crcp_copy': False,
+        'jpcp_d_cm': 30, 'crcp_d_cm': 25,
+        '_do_reset_pt': False,
+    }
+    for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
-    # ── Header ────────────────────────────────────────────
-    proj = st.session_state.get('flex_project_name', '') or '— ยังไม่ระบุโครงการ'
+    # ── Header ───────────────────────────────────────────────
+    proj = st.session_state.get('project_name', '') or '— ยังไม่ระบุโครงการ'
     st.markdown(f'''
-    <div class="fp-header">
+    <div class="rp-header">
         <div>
-            <div class="fp-header-title">🛤️ Flexible Pavement Design — AASHTO 1993</div>
-            <div class="fp-header-sub">ภาควิชาครุศาสตร์โยธา · มจพ. · Version 1.0</div>
+            <div class="rp-header-title">🛣️ Rigid Pavement Design — AASHTO 1993</div>
+            <div class="rp-header-sub">ภาควิชาครุศาสตร์โยธา · มจพ. · Version 7.0</div>
         </div>
-        <div class="fp-badge">📁 {proj}</div>
+        <div class="rp-badge">📁 {proj}</div>
     </div>''', unsafe_allow_html=True)
 
-    # ── Tabs ──────────────────────────────────────────────
+    # ── Tabs ─────────────────────────────────────────────────
     tab1, tab2, tab3, tab4 = st.tabs([
-        '🚦 Tab 1 — Traffic & W18',
-        '🌍 Tab 2 — Subgrade & Layers',
+        '🚦 Tab 1 — Traffic & ESAL',
+        '🪨 Tab 2 — Subgrade & k∞',
         '🏗️ Tab 3 — Design',
         '📄 Tab 4 — Report',
     ])
 
     with tab1:
-        render_flex_tab1()
+        render_tab1()
 
     with tab2:
-        st.info('Tab 2 — Subgrade & Layers (กำลังพัฒนา)')
+        render_tab2()
 
     with tab3:
-        st.info('Tab 3 — Design (กำลังพัฒนา)')
+        render_tab3()
 
     with tab4:
-        st.info('Tab 4 — Report (กำลังพัฒนา)')
+        render_tab4()
 
     st.markdown('---')
     st.caption('พัฒนาโดย รศ.ดร.อิทธิพล มีผล · ภาควิชาครุศาสตร์โยธา · มจพ.')
-
 
 if __name__ == '__main__':
     main()
