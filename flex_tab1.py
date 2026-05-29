@@ -345,8 +345,10 @@ def _process_esal_json(raw: dict, filename: str):
         W18_total, tf = compute_esal_flex(
             traffic_data, pt_json, lane_factor, direction_factor, SN=5.0)
         # คำนวณ W18-SN table ล่วงหน้า cache ไว้ใน esal_data
+        param_list = raw.get('param_list', None)   # SN list จาก JSON
         sn_table = compute_w18_sn_table(
-            traffic_data, pt_json, lane_factor, direction_factor)
+            traffic_data, pt_json, lane_factor, direction_factor,
+            sn_grid=param_list)
     except Exception as e:
         st.error(f'❌ คำนวณ W18 ไม่ได้: {e}')
         st.session_state['flex_esal_data'] = None
@@ -362,6 +364,7 @@ def _process_esal_json(raw: dict, filename: str):
         'W18_computed':     W18_total,
         'truck_factors':    tf,
         'sn_table':         sn_table,   # ← W18-SN mapping
+        'param_list':       raw.get('param_list', None),
     }
     st.session_state['_flex_w18_pending'] = float(W18_total)
     st.session_state['_flex_pt_pending']  = pt_json
@@ -408,7 +411,8 @@ def _show_esal_summary(ed: dict):
         try:
             sn_tbl = compute_w18_sn_table(
                 ed['traffic_data'], ed['pt'],
-                ed['lane_factor'], ed['direction_factor'])
+                ed['lane_factor'], ed['direction_factor'],
+                sn_grid=ed.get('param_list', None))
             # update cache
             st.session_state['flex_esal_data']['sn_table'] = sn_tbl
         except Exception:
