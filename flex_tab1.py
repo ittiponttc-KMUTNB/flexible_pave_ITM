@@ -380,17 +380,6 @@ def _show_esal_summary(ed: dict):
     st.success(f'✅ โหลดสำเร็จ: {ed["filename"]}')
     _hr()
 
-    # สรุปหลัก
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        _mbox('W₁₈ (คำนวณจาก JSON)', f'{W18:,.0f}', 'ESALs')
-    with c2:
-        _mbox('W₁₈ (ล้าน ESAL)', f'{W18/1e6:.3f}', '×10⁶')
-    with c3:
-        _mbox('ระยะออกแบบ', f'{n_years}', 'ปี')
-
-    _hr()
-
     # parameters
     c4, c5, c6 = st.columns(3)
     with c4:
@@ -398,12 +387,11 @@ def _show_esal_summary(ed: dict):
         _row('Direction Factor', f'{ed["direction_factor"]:.2f}')
     with c5:
         _row('Pt (จาก JSON)', f'{ed["pt"]:.1f}')
+        _row('ระยะออกแบบ', f'{n_years} ปี')
     with c6:
-        st.markdown(
-            '<div style="font-size:10px;color:#90A4AE">'
-            'W₁₈ @ SN=5 เป็นค่า preliminary<br>'
-            'ตาราง SN mapping แสดงด้านล่าง</div>',
-            unsafe_allow_html=True)
+        param_list = ed.get('param_list')
+        sn_str = ', '.join(str(s) for s in param_list) if param_list else 'Default grid'
+        _row('SN ที่คำนวณ', sn_str)
 
     # ── W18–SN Mapping Table ──────────────────────────────
     # ถ้า sn_table ไม่มีใน cache (โหลดจาก session เก่า) ให้คำนวณใหม่
