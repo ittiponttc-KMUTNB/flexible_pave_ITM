@@ -242,13 +242,13 @@ def generate_pdf(
 
         dmin = L['min_thickness_cm']
         dmin_str = f"{dmin:.1f}" if dmin > 0 else '—'
-        ok_p = p('Pass', s_pass) if L['is_ok'] else p('Fail', s_fail)
+        ok_p = p('✓', s_pass) if L['is_ok'] else p('✗', s_fail)
 
         tbl_rows.append([
             p(mat_txt, s_cell),
             pr(f"{L['design_thickness_cm']:.0f}"),
             pr(f"{L['a_i']:.2f}"),
-            pr(f"{L['m_i']:.2f}"),
+            pr(f"{L['m_i']:.1f}"),
             pr(f"{L['sn_contribution']:.2f}"),
             pr(f"{L['cumulative_sn']:.2f}"),
             pr(f"{L['sn_required_at_layer']:.2f}"),
