@@ -112,6 +112,20 @@ def _render_layers():
 
     st.session_state['flex_layers'] = layers
 
+    # ── Column header ─────────────────────────────────────
+    st.markdown(
+        '<div style="display:grid;grid-template-columns:0.35fr 3.8fr 1.0fr 1.1fr 1.1fr 1.2fr;'
+        'gap:8px;padding:4px 8px 4px 8px;background:#F5F5F5;border-radius:6px;'
+        'margin-bottom:4px;font-size:11px;font-weight:600;color:#78909C">'
+        '<div></div>'
+        '<div>วัสดุ</div>'
+        '<div style="text-align:center">D (cm)</div>'
+        '<div style="text-align:center">aᵢ</div>'
+        '<div style="text-align:center">mᵢ</div>'
+        '<div style="text-align:center"></div>'
+        '</div>',
+        unsafe_allow_html=True)
+
     # ── Layer cards ────────────────────────────────────────
     for i, L in enumerate(layers):
         mat      = L['material']
