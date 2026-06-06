@@ -28,7 +28,7 @@ _AC_BDL = '#FFAB91'
 # ============================================================
 # Font Setup
 # ============================================================
-_FONT_DIR = os.path.join(os.path.dirname(__file__), 'fonts')
+_FONT_DIR = os.path.dirname(os.path.abspath(__file__))
 _FONT_REG  = os.path.join(_FONT_DIR, 'Sarabun-Regular.ttf')
 _FONT_BOLD = os.path.join(_FONT_DIR, 'Sarabun-Bold.ttf')
 
