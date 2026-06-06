@@ -1,25 +1,18 @@
 """
-flex_tab2.py — Tab 2: Subgrade & Layer Setup
+flex_tab2.py — Tab 2: Design (Subgrade + Layers + Results real-time)
 Flexible Pavement Design V1 · AASHTO 1993
+Layout: ซ้าย 60% = inputs | ขวา 40% = summary + cross-section
 """
 import streamlit as st
+from io import BytesIO
 from flex_engine import (
-    mr_from_cbr, MATERIALS, MATERIAL_NAMES,
-    PRESETS, DRAINAGE_TABLE,
+    mr_from_cbr, get_zr, calc_layer_results, check_sn,
+    plot_flex_structure, fig_to_bytes,
+    MATERIALS, MATERIAL_NAMES, DRAINAGE_TABLE,
 )
 
 _AC_BD  = '#BF360C'
 _AC_BDL = '#FFAB91'
-_AC_BG  = '#FBE9E7'
-
-# ── layer type label ─────────────────────────────────────────
-_LAYER_TYPE_LABEL = {
-    'surface':  '🔲 ผิวทาง',
-    'base':     '🟫 พื้นทาง',
-    'subbase':  '🟧 รองพื้นทาง',
-    'selected': '🟨 วัสดุคัดเลือก',
-    'none':     '—',
-}
 
 # ============================================================
 # UI Helpers
@@ -30,456 +23,426 @@ def _card_title(text, color=_AC_BD, border=_AC_BDL):
         f'padding:2px 0 6px;border-bottom:2px solid {border};'
         f'margin-bottom:10px">{text}</div>', unsafe_allow_html=True)
 
-
-def _row(label, value, hi=False):
-    c = _AC_BD if hi else '#4E342E'
-    st.markdown(
-        f'<div style="display:flex;justify-content:space-between;'
-        f'padding:3px 0;border-bottom:1px solid rgba(0,0,0,0.06);font-size:12px">'
-        f'<span style="color:#78909C">{label}</span>'
-        f'<span style="font-family:IBM Plex Mono,monospace;font-weight:600;color:{c}">'
-        f'{value}</span></div>', unsafe_allow_html=True)
-
-
-def _badge(text, bg='#E3F2FD', color='#1565C0'):
-    st.markdown(
-        f'<span style="background:{bg};color:{color};border-radius:5px;'
-        f'padding:2px 8px;font-size:11px;font-weight:600">{text}</span>',
-        unsafe_allow_html=True)
-
-
 def _hr(color='#FFCCBC'):
     st.markdown(
         f'<hr style="border:none;border-top:1px solid {color};margin:6px 0">',
         unsafe_allow_html=True)
 
+def _badge(text, bg, color):
+    return (f'<span style="background:{bg};color:{color};border-radius:4px;'
+            f'padding:2px 8px;font-size:11px;font-weight:600;'
+            f'font-family:IBM Plex Mono,monospace">{text}</span>')
 
 # ============================================================
 # Session State Init
 # ============================================================
-def _init_layers(preset_layers: list | None = None):
-    """สร้าง/reset layer list ใน session state"""
-    if preset_layers:
-        layers = []
-        for pl in preset_layers:
-            mat  = pl['material']
-            mdat = MATERIALS.get(mat, {})
-            layers.append({
-                'material':      mat,
-                'thickness_cm':  float(pl.get('thickness_cm', 15.0)),
-                'layer_coeff':   mdat.get('layer_coeff', 0.10),
-                'drainage_coeff': 1.0,
-                'override_ai':   False,
-            })
-        st.session_state['flex_layers'] = layers
-    elif 'flex_layers' not in st.session_state:
-        # default: AC + CTB + GSB + SM
-        default = PRESETS.get('AC + CTB + GSB + SM (มาตรฐานหลัก)')
-        if default:
-            _init_layers(default['layers'])
-        else:
-            st.session_state['flex_layers'] = [
-                {'material': 'ผิวทางลาดยาง AC',
-                 'thickness_cm': 15.0, 'layer_coeff': 0.40,
-                 'drainage_coeff': 1.0, 'override_ai': False},
-            ]
+_DEFAULT_LAYERS = [
+    {'material': 'ผิวทางลาดยาง AC',
+     'thickness_cm': 15.0, 'layer_coeff': 0.40,
+     'drainage_coeff': 1.0, 'override_ai': False,
+     'ac_sub': False, 'wearing_cm': 5.0, 'binder_cm': 5.0, 'base_cm': 5.0},
+    {'material': 'พื้นทางหินคลุกปรับปรุงคุณภาพด้วยปูนซีเมนต์ (Cement Treated Base)',
+     'thickness_cm': 15.0, 'layer_coeff': 0.18,
+     'drainage_coeff': 1.0, 'override_ai': False,
+     'ac_sub': False, 'wearing_cm': 0.0, 'binder_cm': 0.0, 'base_cm': 0.0},
+    {'material': 'รองพื้นทางวัสดุมวลรวม CBR 25%',
+     'thickness_cm': 15.0, 'layer_coeff': 0.10,
+     'drainage_coeff': 1.0, 'override_ai': False,
+     'ac_sub': False, 'wearing_cm': 0.0, 'binder_cm': 0.0, 'base_cm': 0.0},
+    {'material': 'วัสดุคัดเลือก ก',
+     'thickness_cm': 30.0, 'layer_coeff': 0.08,
+     'drainage_coeff': 1.0, 'override_ai': False,
+     'ac_sub': False, 'wearing_cm': 0.0, 'binder_cm': 0.0, 'base_cm': 0.0},
+]
 
+def _init_ss():
+    if 'flex_layers' not in st.session_state:
+        import copy
+        st.session_state['flex_layers'] = copy.deepcopy(_DEFAULT_LAYERS)
+    if 'flex_cbr' not in st.session_state:
+        st.session_state['flex_cbr'] = 4.0
+    if 'flex_subgrade_mr' not in st.session_state:
+        st.session_state['flex_subgrade_mr'] = mr_from_cbr(4.0)
+
+def _layer_base(mat):
+    return {
+        'material': mat,
+        'thickness_cm': 15.0,
+        'layer_coeff': MATERIALS[mat]['layer_coeff'],
+        'drainage_coeff': 1.0,
+        'override_ai': False,
+        'ac_sub': False,
+        'wearing_cm': 5.0, 'binder_cm': 5.0, 'base_cm': 5.0,
+    }
 
 # ============================================================
-# Drainage Helper
+# Drainage helper
 # ============================================================
-def _get_mi(quality: str, saturation: str) -> float:
+def _get_mi(quality, saturation):
     return DRAINAGE_TABLE.get(quality, {}).get('values', {}).get(saturation, 1.0)
 
-
 # ============================================================
-# Layer Card
+# Left panel — Layer Table
 # ============================================================
-def _render_layer_card(idx: int, layer: dict, n_layers: int):
-    """render card สำหรับแต่ละชั้น — return (updated_layer, delete_flag)"""
-    mat       = layer['material']
-    mat_data  = MATERIALS.get(mat, {})
-    ltype     = mat_data.get('layer_type', 'base')
-    ltype_lbl = _LAYER_TYPE_LABEL.get(ltype, '')
+def _render_layers():
+    layers = st.session_state['flex_layers']
+    n = len(layers)
+    delete_idx = None
+    move = None  # (idx, direction)
 
-    delete_flag = False
+    for i, L in enumerate(layers):
+        mat      = L['material']
+        mat_data = MATERIALS.get(mat, {})
+        ltype    = mat_data.get('layer_type', 'base')
+        is_ac    = ltype == 'surface'
+        ai_def   = mat_data.get('layer_coeff', 0.10)
 
-    with st.container(border=True):
-        # ── header row ──────────────────────────────────────
-        hc1, hc2, hc3 = st.columns([5, 2, 1])
-        with hc1:
-            st.markdown(
-                f'<div style="font-size:13px;font-weight:700;color:{_AC_BD}">'
-                f'ชั้นที่ {idx + 1} &nbsp;'
-                f'<span style="font-size:11px;font-weight:400;color:#78909C">'
-                f'{ltype_lbl}</span></div>',
-                unsafe_allow_html=True)
-        with hc2:
-            # ย้ายชั้น ↑↓
-            mv1, mv2 = st.columns(2)
-            with mv1:
-                if st.button('↑', key=f'layer_up_{idx}',
-                             disabled=(idx == 0), use_container_width=True):
-                    layers = st.session_state['flex_layers']
-                    layers[idx - 1], layers[idx] = layers[idx], layers[idx - 1]
-                    st.rerun()
-            with mv2:
-                if st.button('↓', key=f'layer_dn_{idx}',
-                             disabled=(idx == n_layers - 1), use_container_width=True):
-                    layers = st.session_state['flex_layers']
-                    layers[idx], layers[idx + 1] = layers[idx + 1], layers[idx]
-                    st.rerun()
-        with hc3:
-            if st.button('🗑️', key=f'layer_del_{idx}',
-                         help='ลบชั้นนี้', use_container_width=True):
-                delete_flag = True
-
-        _hr()
-
-        # ── วัสดุ + ความหนา ──────────────────────────────────
-        c1, c2 = st.columns([3, 2])
-        with c1:
-            mat_names = MATERIAL_NAMES
-            cur_idx   = mat_names.index(mat) if mat in mat_names else 0
-            new_mat   = st.selectbox(
-                'วัสดุ',
-                options=mat_names,
-                index=cur_idx,
-                key=f'layer_mat_{idx}',
-                label_visibility='collapsed',
-            )
-            if new_mat != mat:
-                layer['material']     = new_mat
-                layer['layer_coeff']  = MATERIALS[new_mat]['layer_coeff']
-                layer['override_ai']  = False
-                st.rerun()
-
-        with c2:
-            new_t = st.number_input(
-                'ความหนา (cm)',
-                min_value=1.0, max_value=150.0,
-                value=float(layer['thickness_cm']),
-                step=1.0, format='%.0f',
-                key=f'layer_t_{idx}',
-                label_visibility='collapsed',
-            )
-            layer['thickness_cm'] = new_t
-
-        # ── a_i (Layer Coefficient) ───────────────────────────
-        ai_default = MATERIALS.get(layer['material'], {}).get('layer_coeff', 0.10)
-        c3, c4 = st.columns([3, 2])
-        with c3:
-            override = st.checkbox(
-                f'Override a_i (ค่า default = {ai_default:.3f})',
-                value=layer.get('override_ai', False),
-                key=f'layer_override_{idx}',
-            )
-            layer['override_ai'] = override
-        with c4:
-            if override:
-                new_ai = st.number_input(
-                    'a_i',
-                    min_value=0.01, max_value=0.60,
-                    value=float(layer.get('layer_coeff', ai_default)),
-                    step=0.01, format='%.3f',
-                    key=f'layer_ai_{idx}',
-                    label_visibility='collapsed',
-                )
-                layer['layer_coeff'] = new_ai
-            else:
-                layer['layer_coeff'] = ai_default
+        with st.container(border=True):
+            # ── header ──────────────────────────────────────
+            h1, h2, h3, h4, h5 = st.columns([0.4, 4, 1.2, 1.2, 0.8])
+            with h1:
                 st.markdown(
-                    f'<div style="background:#E3F2FD;border-radius:6px;'
-                    f'padding:6px 10px;text-align:center;margin-top:2px">'
-                    f'<span style="font-size:10px;color:#78909C">a_i (auto)</span><br>'
-                    f'<span style="font-family:IBM Plex Mono,monospace;'
-                    f'font-size:18px;font-weight:700;color:#1565C0">'
-                    f'{ai_default:.3f}</span></div>',
+                    f'<div style="font-size:12px;font-weight:700;color:{_AC_BD};'
+                    f'padding-top:6px;text-align:center">{i+1}</div>',
+                    unsafe_allow_html=True)
+            with h2:
+                new_mat = st.selectbox(
+                    'วัสดุ', options=MATERIAL_NAMES,
+                    index=MATERIAL_NAMES.index(mat) if mat in MATERIAL_NAMES else 0,
+                    key=f'lmat_{i}', label_visibility='collapsed')
+                if new_mat != mat:
+                    L['material']    = new_mat
+                    L['layer_coeff'] = MATERIALS[new_mat]['layer_coeff']
+                    L['override_ai'] = False
+                    st.rerun()
+            with h3:
+                new_t = st.number_input(
+                    'cm', min_value=1.0, max_value=200.0,
+                    value=float(L['thickness_cm']),
+                    step=1.0, format='%.0f',
+                    key=f'lt_{i}', label_visibility='collapsed')
+                L['thickness_cm'] = new_t
+            with h4:
+                # a_i — inline toggle
+                if L.get('override_ai'):
+                    new_ai = st.number_input(
+                        'a_i', min_value=0.01, max_value=0.60,
+                        value=float(L.get('layer_coeff', ai_def)),
+                        step=0.005, format='%.3f',
+                        key=f'lai_{i}', label_visibility='collapsed')
+                    L['layer_coeff'] = new_ai
+                else:
+                    L['layer_coeff'] = ai_def
+                    st.markdown(
+                        f'<div style="background:#E3F2FD;border-radius:5px;'
+                        f'padding:5px 8px;text-align:center;margin-top:2px;'
+                        f'font-family:IBM Plex Mono,monospace;font-size:13px;'
+                        f'font-weight:600;color:#1565C0">{ai_def:.3f}</div>',
+                        unsafe_allow_html=True)
+            with h5:
+                u1, u2 = st.columns(2)
+                with u1:
+                    if st.button('↑', key=f'lup_{i}',
+                                 disabled=(i==0), use_container_width=True):
+                        move = (i, -1)
+                with u2:
+                    if st.button('↓', key=f'ldn_{i}',
+                                 disabled=(i==n-1), use_container_width=True):
+                        move = (i, 1)
+
+            # ── row 2: checkboxes + m_i + delete ──────────────
+            r1, r2, r3, r4 = st.columns([2, 2, 2, 1])
+            with r1:
+                ov = st.checkbox(
+                    f'Override a_i', value=L.get('override_ai', False),
+                    key=f'lov_{i}')
+                L['override_ai'] = ov
+            with r2:
+                # m_i dropdown inline
+                if is_ac:
+                    L['drainage_coeff'] = 1.0
+                    st.markdown(
+                        '<span style="font-size:11px;color:#78909C">'
+                        'm_i = 1.00 (fixed)</span>',
+                        unsafe_allow_html=True)
+                else:
+                    dq_opts  = list(DRAINAGE_TABLE.keys())
+                    sat_opts = ['<1%', '1-5%', '5-25%', '>25%']
+                    dq_k     = f'ldq_{i}'
+                    sat_k    = f'lsat_{i}'
+                    if dq_k  not in st.session_state: st.session_state[dq_k]  = 'Good'
+                    if sat_k not in st.session_state: st.session_state[sat_k] = '1-5%'
+                    dq  = st.selectbox('Quality', dq_opts,
+                                       index=dq_opts.index(st.session_state[dq_k]),
+                                       key=dq_k, label_visibility='collapsed')
+                    sat = st.selectbox('Sat', sat_opts,
+                                       index=sat_opts.index(st.session_state[sat_k]),
+                                       key=sat_k, label_visibility='collapsed')
+                    mi = _get_mi(dq, sat)
+                    L['drainage_coeff'] = mi
+                    st.markdown(
+                        f'<span style="font-size:11px;color:#2E7D32;'
+                        f'font-family:IBM Plex Mono,monospace">m_i={mi:.2f}</span>',
+                        unsafe_allow_html=True)
+            with r3:
+                # AC sublayer checkbox
+                if is_ac:
+                    ac_sub = st.checkbox(
+                        'แบ่งชั้นย่อย AC', value=L.get('ac_sub', False),
+                        key=f'lacsub_{i}')
+                    L['ac_sub'] = ac_sub
+                else:
+                    st.markdown('')
+            with r4:
+                if st.button('🗑️', key=f'ldel_{i}', use_container_width=True):
+                    delete_idx = i
+
+            # ── AC sublayer inputs ────────────────────────────
+            if is_ac and L.get('ac_sub'):
+                sc1, sc2, sc3 = st.columns(3)
+                with sc1:
+                    w = st.number_input('Wearing (cm)', 1.0, 50.0,
+                                        float(L.get('wearing_cm', 5.0)),
+                                        1.0, format='%.0f', key=f'lwear_{i}')
+                    L['wearing_cm'] = w
+                with sc2:
+                    b = st.number_input('Binder (cm)', 0.0, 50.0,
+                                        float(L.get('binder_cm', 5.0)),
+                                        1.0, format='%.0f', key=f'lbind_{i}')
+                    L['binder_cm'] = b
+                with sc3:
+                    base = st.number_input('Base (cm)', 0.0, 50.0,
+                                           float(L.get('base_cm', 5.0)),
+                                           1.0, format='%.0f', key=f'lbase_{i}')
+                    L['base_cm'] = base
+                total_ac = w + b + base
+                L['thickness_cm'] = total_ac
+                st.markdown(
+                    f'<div style="font-size:11px;color:#BF360C;font-family:'
+                    f'IBM Plex Mono,monospace">W+B+Base = {w:.0f}+{b:.0f}+'
+                    f'{base:.0f} = {total_ac:.0f} cm → ความหนารวม AC</div>',
                     unsafe_allow_html=True)
 
-        # ── Drainage ──────────────────────────────────────────
-        # ชั้น surface (AC/PMA) ใช้ m_i = 1.0 fixed
-        if ltype == 'surface':
-            layer['drainage_coeff'] = 1.0
+            # ── preview badge row ──────────────────────────────
+            ai   = L['layer_coeff']
+            mi   = L['drainage_coeff']
+            t    = L['thickness_cm']
+            dsn  = round(ai * (t / 2.54) * mi, 3)
+            mr_l = mat_data.get('mr_psi', 0)
             st.markdown(
-                '<div style="font-size:11px;color:#78909C;margin-top:4px">'
-                'Drainage m_i = 1.0 (ผิวทาง — fixed)</div>',
+                f'{_badge(f"a_i={ai:.3f}", "#E3F2FD", "#0D47A1")}&nbsp;'
+                f'{_badge(f"m_i={mi:.2f}", "#E8F5E9", "#1B5E20")}&nbsp;'
+                f'{_badge(f"D={t:.0f} cm", "#FFF3CD", "#E65100")}&nbsp;'
+                f'{_badge(f"ΔSN={dsn:.3f}", "#FBE9E7", "#BF360C")}&nbsp;'
+                f'{_badge(f"Mr={mr_l:,} psi", "#F3E5F5", "#4A148C")}',
                 unsafe_allow_html=True)
-        else:
-            with st.expander('⚙️ Drainage Coefficient (m_i)', expanded=False):
-                dq_options  = list(DRAINAGE_TABLE.keys())
-                sat_options = ['<1%', '1-5%', '5-25%', '>25%']
 
-                dq_key  = f'layer_dq_{idx}'
-                sat_key = f'layer_sat_{idx}'
+        layers[i] = L
 
-                if dq_key not in st.session_state:
-                    st.session_state[dq_key]  = 'Good'
-                if sat_key not in st.session_state:
-                    st.session_state[sat_key] = '1-5%'
+    # apply move
+    if move:
+        idx, d = move
+        layers[idx], layers[idx+d] = layers[idx+d], layers[idx]
+        st.session_state['flex_layers'] = layers
+        st.rerun()
+    if delete_idx is not None:
+        layers.pop(delete_idx)
+        st.session_state['flex_layers'] = layers
+        st.rerun()
 
-                dc1, dc2 = st.columns(2)
-                with dc1:
-                    dq = st.selectbox(
-                        'Drainage Quality',
-                        options=dq_options,
-                        index=dq_options.index(
-                            st.session_state.get(dq_key, 'Good')),
-                        key=dq_key,
-                    )
-                with dc2:
-                    sat = st.selectbox(
-                        '% Time Saturated',
-                        options=sat_options,
-                        index=sat_options.index(
-                            st.session_state.get(sat_key, '1-5%')),
-                        key=sat_key,
-                    )
+    st.session_state['flex_layers'] = layers
 
-                mi = _get_mi(dq, sat)
-                layer['drainage_coeff'] = mi
-                desc = DRAINAGE_TABLE[dq]['description']
-                st.markdown(
-                    f'<div style="background:#E8F5E9;border-radius:6px;'
-                    f'padding:6px 10px;margin-top:4px;font-size:12px">'
-                    f'{desc} &nbsp;→&nbsp; '
-                    f'<b style="font-family:IBM Plex Mono,monospace;color:#2E7D32">'
-                    f'm_i = {mi:.2f}</b></div>',
-                    unsafe_allow_html=True)
-
-        # ── preview SN contribution ───────────────────────────
-        ai  = layer['layer_coeff']
-        mi  = layer['drainage_coeff']
-        t   = layer['thickness_cm']
-        sn  = round(ai * (t / 2.54) * mi, 3)
-        mr  = MATERIALS.get(layer['material'], {}).get('mr_psi', 0)
-        _hr()
+    # ── add layer ──────────────────────────────────────────
+    ca, cb = st.columns([1, 3])
+    with ca:
+        if st.button('➕ เพิ่มชั้น', use_container_width=True):
+            layers.append(_layer_base('รองพื้นทางวัสดุมวลรวม CBR 25%'))
+            st.session_state['flex_layers'] = layers
+            st.rerun()
+    with cb:
         st.markdown(
-            f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:2px">'
-            f'<span style="background:#FBE9E7;border-radius:5px;padding:3px 8px;'
-            f'font-size:11px">a_i = <b style="font-family:IBM Plex Mono,monospace">'
-            f'{ai:.3f}</b></span>'
-            f'<span style="background:#FBE9E7;border-radius:5px;padding:3px 8px;'
-            f'font-size:11px">m_i = <b style="font-family:IBM Plex Mono,monospace">'
-            f'{mi:.2f}</b></span>'
-            f'<span style="background:#FBE9E7;border-radius:5px;padding:3px 8px;'
-            f'font-size:11px">D = <b style="font-family:IBM Plex Mono,monospace">'
-            f'{t:.0f} cm ({t/2.54:.2f}")</b></span>'
-            f'<span style="background:#E8F5E9;border-radius:5px;padding:3px 8px;'
-            f'font-size:11px;color:#2E7D32">ΔSN = <b style="font-family:IBM Plex Mono,monospace">'
-            f'{sn:.3f}</b></span>'
-            f'<span style="background:#E3F2FD;border-radius:5px;padding:3px 8px;'
-            f'font-size:11px;color:#1565C0">Mr = <b style="font-family:IBM Plex Mono,monospace">'
-            f'{mr:,} psi</b></span>'
-            f'</div>',
+            f'<span style="font-size:11px;color:#78909C">'
+            f'{len(layers)} ชั้น | ↑↓ เรียงลำดับ | 🗑️ ลบ</span>',
             unsafe_allow_html=True)
 
-    return layer, delete_flag
-
-
 # ============================================================
-# Layer Summary Table
+# Right panel — calculate + summary + cross-section
 # ============================================================
-def _render_layer_summary(layers: list, cbr: float):
-    """ตารางสรุปทุกชั้น + SN รวม"""
-    if not layers:
+def _calc_and_render_right(layers, cbr, W18, Zr, So, delta_psi):
+    mr_sub = mr_from_cbr(cbr)
+
+    # ── คำนวณ ──────────────────────────────────────────────
+    if not layers or W18 <= 0:
+        st.info('กรอกข้อมูลครบแล้วจะแสดงผลที่นี่')
         return
 
-    total_sn   = 0.0
-    total_cm   = 0.0
-    rows_html  = ''
-    for i, layer in enumerate(layers):
-        ai   = layer['layer_coeff']
-        mi   = layer['drainage_coeff']
-        t    = layer['thickness_cm']
-        sn   = ai * (t / 2.54) * mi
-        total_sn += sn
-        total_cm += t
-        mat  = MATERIALS.get(layer['material'], {})
-        sname = mat.get('short_name', layer['material'][:8])
+    res = calc_layer_results(W18, Zr, So, delta_psi, mr_sub, layers)
+    chk = check_sn(res['total_sn_required'], res['total_sn_provided'])
+
+    # ── warnings ───────────────────────────────────────────
+    for w in res['warnings']:
+        st.warning(w)
+
+    # ── PASS / FAIL banner ─────────────────────────────────
+    if chk['passed']:
+        st.markdown(
+            f'<div style="background:#E8F5E9;border:2px solid #2E7D32;'
+            f'border-radius:8px;padding:10px 14px;text-align:center;margin-bottom:8px">'
+            f'<div style="font-size:15px;font-weight:700;color:#2E7D32">✅ PASS</div>'
+            f'<div style="font-family:IBM Plex Mono,monospace;font-size:12px;color:#2E7D32">'
+            f'SN_provided ({res["total_sn_provided"]:.3f}) ≥ '
+            f'SN_required ({res["total_sn_required"]:.3f})</div>'
+            f'<div style="font-size:11px;color:#388E3C">margin = '
+            f'+{chk["safety_margin"]:.3f}</div>'
+            f'</div>', unsafe_allow_html=True)
+    else:
+        sn_req = res['total_sn_required'] or 0
+        st.markdown(
+            f'<div style="background:#FFEBEE;border:2px solid #C62828;'
+            f'border-radius:8px;padding:10px 14px;text-align:center;margin-bottom:8px">'
+            f'<div style="font-size:15px;font-weight:700;color:#C62828">❌ FAIL</div>'
+            f'<div style="font-family:IBM Plex Mono,monospace;font-size:12px;color:#C62828">'
+            f'SN_provided ({res["total_sn_provided"]:.3f}) &lt; '
+            f'SN_required ({sn_req:.3f})</div>'
+            f'<div style="font-size:11px;color:#C62828">ขาด = '
+            f'{abs(chk["safety_margin"]):.3f}</div>'
+            f'</div>', unsafe_allow_html=True)
+
+    # ── SN summary table ───────────────────────────────────
+    rows_html = ''
+    for L in res['layers']:
+        ok_icon = '✅' if L['is_ok'] else '⚠️'
         rows_html += (
             f'<tr>'
-            f'<td style="text-align:center">{i+1}</td>'
-            f'<td>{sname}</td>'
-            f'<td style="text-align:right">{ai:.3f}</td>'
-            f'<td style="text-align:right">{mi:.2f}</td>'
-            f'<td style="text-align:right">{t:.0f} cm</td>'
-            f'<td style="text-align:right;font-weight:600;color:#BF360C">'
-            f'{sn:.3f}</td>'
+            f'<td style="text-align:center">{L["layer_no"]}</td>'
+            f'<td>{L["short_name"]}</td>'
+            f'<td style="text-align:right;font-family:IBM Plex Mono,monospace">'
+            f'{L["design_thickness_cm"]:.0f}</td>'
+            f'<td style="text-align:right;font-family:IBM Plex Mono,monospace;'
+            f'color:#BF360C">{L["sn_contribution"]:.3f}</td>'
+            f'<td style="text-align:right;font-family:IBM Plex Mono,monospace">'
+            f'{L["cumulative_sn"]:.3f}</td>'
+            f'<td style="text-align:center">{ok_icon}</td>'
             f'</tr>'
         )
-
-    mr_sub = round(1500 * cbr if cbr < 10 else 1000 + 555 * cbr)
+    sn_prov = res['total_sn_provided']
+    sn_req  = res['total_sn_required'] or 0
+    total_t = sum(L['design_thickness_cm'] for L in res['layers'])
     st.markdown(
-        f'<table style="width:100%;border-collapse:collapse;font-size:12px">'
+        f'<table style="width:100%;border-collapse:collapse;font-size:11px">'
         f'<thead><tr style="background:#BF360C;color:white">'
-        f'<th style="padding:5px 8px;text-align:center">ชั้น</th>'
-        f'<th style="padding:5px 8px;text-align:left">วัสดุ</th>'
-        f'<th style="padding:5px 8px;text-align:right">a_i</th>'
-        f'<th style="padding:5px 8px;text-align:right">m_i</th>'
-        f'<th style="padding:5px 8px;text-align:right">ความหนา</th>'
-        f'<th style="padding:5px 8px;text-align:right">ΔSN</th>'
+        f'<th style="padding:4px 6px">#</th>'
+        f'<th style="padding:4px 6px;text-align:left">วัสดุ</th>'
+        f'<th style="padding:4px 6px;text-align:right">cm</th>'
+        f'<th style="padding:4px 6px;text-align:right">ΔSN</th>'
+        f'<th style="padding:4px 6px;text-align:right">ΣSN</th>'
+        f'<th style="padding:4px 6px">ok?</th>'
         f'</tr></thead>'
         f'<tbody style="background:white">{rows_html}</tbody>'
         f'<tfoot><tr style="background:#FFF3CD;font-weight:700">'
-        f'<td colspan="4" style="padding:5px 8px">รวม</td>'
-        f'<td style="padding:5px 8px;text-align:right">{total_cm:.0f} cm</td>'
-        f'<td style="padding:5px 8px;text-align:right;color:#BF360C">'
-        f'{total_sn:.3f}</td>'
-        f'</tr></tfoot>'
+        f'<td colspan="2" style="padding:4px 6px">รวม</td>'
+        f'<td style="padding:4px 6px;text-align:right;font-family:IBM Plex Mono,monospace">'
+        f'{total_t:.0f} cm</td>'
+        f'<td colspan="2" style="padding:4px 6px;text-align:right;'
+        f'font-family:IBM Plex Mono,monospace;color:#BF360C">'
+        f'SN = {sn_prov:.3f} / {sn_req:.3f}</td>'
+        f'<td></td></tr></tfoot>'
         f'</table>',
         unsafe_allow_html=True)
 
-    st.markdown(
-        f'<div style="font-size:11px;color:#78909C;margin-top:4px">'
-        f'Subgrade: CBR = {cbr:.1f}% → Mr = {mr_sub:,} psi'
-        f'</div>', unsafe_allow_html=True)
+    _hr()
 
+    # ── cross-section ──────────────────────────────────────
+    try:
+        fig = plot_flex_structure(
+            res['layers'], subgrade_cbr=cbr,
+            title=st.session_state.get('flex_project_name', '') or 'Flexible Pavement')
+        buf = fig_to_bytes(fig)
+        import matplotlib.pyplot as plt
+        plt.close(fig)
+        st.image(buf, use_container_width=True)
+    except Exception as e:
+        st.caption(f'ไม่สามารถแสดงรูปตัดขวาง: {e}')
+
+    # ── บันทึกผลลัพธ์ → Tab 3 (Report) ──────────────────
+    st.session_state['flex_calc_results'] = res
+    st.session_state['flex_design_check'] = chk
 
 # ============================================================
-# Main Render
+# Main
 # ============================================================
 def render_flex_tab2():
+    _init_ss()
 
-    _init_layers()
+    # ── พารามิเตอร์จาก Tab 1 ──────────────────────────────
+    W18       = float(st.session_state.get('flex_w18', 0))
+    R         = int(st.session_state.get('flex_reliability', 90))
+    So        = float(st.session_state.get('flex_so', 0.45))
+    p0        = float(st.session_state.get('flex_p0', 4.2))
+    pt        = float(st.session_state.get('flex_pt', 2.5))
+    Zr        = get_zr(R)
+    delta_psi = p0 - pt
 
-    # ── 1. Subgrade ───────────────────────────────────────
-    with st.container(border=True):
-        _card_title('🌍 Subgrade')
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            cbr = st.number_input(
-                'CBR (%)',
-                min_value=1.0, max_value=30.0,
-                value=float(st.session_state.get('flex_cbr', 4.0)),
-                step=0.5, format='%.1f',
-                key='flex_cbr',
-                help='CBR ของดินทางเดิม (In-situ CBR)')
-        with c2:
-            mr = mr_from_cbr(cbr)
-            st.markdown(
-                f'<div style="background:#FBE9E7;border-radius:8px;'
-                f'padding:8px;text-align:center;margin-top:4px">'
-                f'<div style="font-size:10px;color:#78909C">Mr (psi)</div>'
-                f'<div style="font-family:IBM Plex Mono,monospace;font-size:20px;'
-                f'font-weight:700;color:{_AC_BD}">{mr:,.0f}</div>'
-                f'<div style="font-size:10px;color:#78909C">'
-                f'{"1,500×CBR" if cbr < 10 else "1,000+555×CBR"}</div>'
-                f'</div>', unsafe_allow_html=True)
-        with c3:
-            mr_mpa = round(mr * 0.006895, 1)
-            st.markdown(
-                f'<div style="background:#E3F2FD;border-radius:8px;'
-                f'padding:8px;text-align:center;margin-top:4px">'
-                f'<div style="font-size:10px;color:#78909C">Mr (MPa)</div>'
-                f'<div style="font-family:IBM Plex Mono,monospace;font-size:20px;'
-                f'font-weight:700;color:#1565C0">{mr_mpa:.1f}</div>'
-                f'<div style="font-size:10px;color:#78909C">1 psi = 0.006895 MPa</div>'
-                f'</div>', unsafe_allow_html=True)
+    if W18 <= 0:
+        st.warning('⚠️ กรุณากรอก W₁₈ ใน Tab 1 ก่อน')
+        return
 
-        st.session_state['flex_subgrade_mr'] = mr
+    # ── status bar ─────────────────────────────────────────
+    st.markdown(
+        f'<div style="background:#F3E5F5;border:1px solid #CE93D8;'
+        f'border-radius:7px;padding:6px 14px;font-size:12px;margin-bottom:10px">'
+        f'W₁₈ = <b style="font-family:IBM Plex Mono,monospace;color:#6A1B9A">'
+        f'{W18:,.0f}</b>'
+        f'&nbsp;|&nbsp; R = <b style="color:#6A1B9A">{R}%</b>'
+        f'&nbsp;|&nbsp; Zr = <b style="font-family:IBM Plex Mono,monospace;'
+        f'color:#6A1B9A">{Zr:.3f}</b>'
+        f'&nbsp;|&nbsp; ΔPSI = <b style="font-family:IBM Plex Mono,monospace;'
+        f'color:#6A1B9A">{delta_psi:.1f}</b>'
+        f'&nbsp;|&nbsp; S₀ = <b style="font-family:IBM Plex Mono,monospace;'
+        f'color:#6A1B9A">{So:.2f}</b>'
+        f'</div>', unsafe_allow_html=True)
 
-    # ── 2. Preset Structure ───────────────────────────────
-    with st.container(border=True):
-        _card_title('📐 โครงสร้างมาตรฐาน (Preset)')
-        preset_names = list(PRESETS.keys())
-        sel = st.selectbox(
-            'เลือก Preset',
-            options=preset_names,
-            index=0,
-            key='flex_preset_select',
-            label_visibility='collapsed',
-        )
-        if sel != '— เลือกโครงสร้างมาตรฐาน —':
-            preset = PRESETS[sel]
-            st.caption(f'📌 {preset["description"]}')
-            if st.button(f'✅ โหลด Preset: {sel}',
-                         key='flex_load_preset',
-                         type='primary'):
-                _init_layers(preset['layers'])
-                st.session_state['flex_preset_select'] = '— เลือกโครงสร้างมาตรฐาน —'
-                st.rerun()
+    # ── 2 columns layout ───────────────────────────────────
+    left, right = st.columns([3, 2])
 
-    # ── 3. Layer Cards ────────────────────────────────────
-    with st.container(border=True):
-        _card_title('🏗️ กำหนดชั้นทาง')
-
-        layers      = st.session_state.get('flex_layers', [])
-        n           = len(layers)
-        delete_idx  = None
-
-        for i, layer in enumerate(layers):
-            updated_layer, do_del = _render_layer_card(i, layer, n)
-            layers[i] = updated_layer
-            if do_del:
-                delete_idx = i
-
-        # ลบชั้น
-        if delete_idx is not None:
-            layers.pop(delete_idx)
-            st.session_state['flex_layers'] = layers
-            st.rerun()
-
-        st.session_state['flex_layers'] = layers
-
-        _hr()
-
-        # ปุ่มเพิ่มชั้น
-        ca, cb = st.columns([1, 3])
-        with ca:
-            if st.button('➕ เพิ่มชั้น', key='flex_add_layer',
-                         use_container_width=True):
-                layers.append({
-                    'material':       'รองพื้นทางวัสดุมวลรวม CBR 25%',
-                    'thickness_cm':   15.0,
-                    'layer_coeff':    0.10,
-                    'drainage_coeff': 1.0,
-                    'override_ai':    False,
-                })
-                st.session_state['flex_layers'] = layers
-                st.rerun()
-        with cb:
-            st.markdown(
-                f'<div style="font-size:11px;color:#78909C;margin-top:8px">'
-                f'มี {n} ชั้น | ↑↓ เรียงลำดับ | 🗑️ ลบชั้น</div>',
-                unsafe_allow_html=True)
-
-    # ── 4. Summary ────────────────────────────────────────
-    if layers:
+    with left:
+        # Subgrade
         with st.container(border=True):
-            _card_title('📊 สรุปโครงสร้างชั้นทาง')
-            cbr_val = float(st.session_state.get('flex_cbr', 4.0))
-            _render_layer_summary(layers, cbr_val)
+            _card_title('🌍 Subgrade')
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                cbr = st.number_input(
+                    'CBR (%)', 1.0, 30.0,
+                    float(st.session_state.get('flex_cbr', 4.0)),
+                    0.5, format='%.1f', key='flex_cbr')
+            with c2:
+                mr = mr_from_cbr(cbr)
+                st.markdown(
+                    f'<div style="background:#FBE9E7;border-radius:7px;'
+                    f'padding:7px;text-align:center;margin-top:2px">'
+                    f'<div style="font-size:10px;color:#78909C">Mr (psi)</div>'
+                    f'<div style="font-family:IBM Plex Mono,monospace;font-size:18px;'
+                    f'font-weight:700;color:{_AC_BD}">{mr:,.0f}</div></div>',
+                    unsafe_allow_html=True)
+            with c3:
+                st.markdown(
+                    f'<div style="background:#E3F2FD;border-radius:7px;'
+                    f'padding:7px;text-align:center;margin-top:2px">'
+                    f'<div style="font-size:10px;color:#78909C">Mr (MPa)</div>'
+                    f'<div style="font-family:IBM Plex Mono,monospace;font-size:18px;'
+                    f'font-weight:700;color:#1565C0">{mr*0.006895:.1f}</div></div>',
+                    unsafe_allow_html=True)
+            st.session_state['flex_subgrade_mr'] = mr
 
-            _hr()
+        # Layers
+        with st.container(border=True):
+            _card_title('🏗️ ชั้นทาง')
+            _render_layers()
 
-            # ส่งต่อ Tab 3
-            total_sn = sum(
-                L['layer_coeff'] * (L['thickness_cm'] / 2.54) * L['drainage_coeff']
-                for L in layers)
-            w18      = float(st.session_state.get('flex_w18', 0))
-            mr_sub   = float(st.session_state.get('flex_subgrade_mr', mr_from_cbr(cbr_val)))
-
-            st.markdown(
-                f'<div style="background:#E8F5E9;border:1.5px solid #A5D6A7;'
-                f'border-radius:8px;padding:10px 14px">'
-                f'<div style="font-size:12px;font-weight:700;color:#2E7D32;'
-                f'margin-bottom:6px">✅ ข้อมูลพร้อมส่ง Tab 3</div>'
-                f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">'
-                f'<div style="background:#FBE9E7;border-radius:7px;padding:8px;text-align:center">'
-                f'<div style="font-size:10px;color:#78909C">SN_provided (preview)</div>'
-                f'<div style="font-family:IBM Plex Mono,monospace;font-size:18px;'
-                f'font-weight:700;color:{_AC_BD}">{total_sn:.3f}</div>'
-                f'</div>'
-                f'<div style="background:#E3F2FD;border-radius:7px;padding:8px;text-align:center">'
-                f'<div style="font-size:10px;color:#78909C">W₁₈ (design)</div>'
-                f'<div style="font-family:IBM Plex Mono,monospace;font-size:18px;'
-                f'font-weight:700;color:#1565C0">{w18:,.0f}</div>'
-                f'</div>'
-                f'<div style="background:#FFF3CD;border-radius:7px;padding:8px;text-align:center">'
-                f'<div style="font-size:10px;color:#78909C">Mr_subgrade</div>'
-                f'<div style="font-family:IBM Plex Mono,monospace;font-size:18px;'
-                f'font-weight:700;color:#E65100">{mr_sub:,.0f} psi</div>'
-                f'</div>'
-                f'</div></div>',
-                unsafe_allow_html=True)
+    with right:
+        with st.container(border=True):
+            _card_title('📊 ผลการออกแบบ')
+            _calc_and_render_right(
+                st.session_state['flex_layers'],
+                float(st.session_state.get('flex_cbr', 4.0)),
+                W18, Zr, So, delta_psi)
