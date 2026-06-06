@@ -413,13 +413,6 @@ def _show_esal_summary(ed: dict):
         _w18_sn_cards(sn_tbl, w18_design)
 
     # Truck Factors + Traffic table
-    if tf:
-        with st.expander('🔍 Truck Factors (LEF)', expanded=False):
-            cols = st.columns(len(tf))
-            for i, (code, val) in enumerate(tf.items()):
-                with cols[i]:
-                    _mbox(code, f'{val:.4f}', '', '#BF360C', '#FBE9E7')
-
     td = ed.get('traffic_data', [])
     if td:
         with st.expander('📋 ข้อมูลปริมาณจราจร', expanded=False):
