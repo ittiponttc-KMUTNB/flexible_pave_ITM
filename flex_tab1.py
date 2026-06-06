@@ -393,38 +393,73 @@ def _show_esal_summary(ed: dict):
         sn_str = ', '.join(str(s) for s in param_list) if param_list else 'Default grid'
         _row('SN ที่คำนวณ', sn_str)
 
-    # ── W18–SN Mapping Table ──────────────────────────────
-    # ถ้า sn_table ไม่มีใน cache (โหลดจาก session เก่า) ให้คำนวณใหม่
+    # ── กำหนด SN 4 ค่า สำหรับคำนวณ ESAL ──────────────────
+    _hr()
+    st.markdown(
+        '<div style="font-size:12px;font-weight:700;color:#BF360C;margin-bottom:6px">'
+        '⚙️ กำหนด SN สำหรับคำนวณ ESAL (4 ค่า)</div>',
+        unsafe_allow_html=True)
+
+    # โหลดค่า SN จาก param_list หรือ default
+    param_list_cur = ed.get('param_list') or [5.0, 6.0, 7.0, 8.0]
+    while len(param_list_cur) < 4:
+        param_list_cur.append(param_list_cur[-1] + 1.0)
+    param_list_cur = param_list_cur[:4]
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    sn_inputs = []
+    for ci, (col, default_sn) in enumerate(zip(
+            [sc1, sc2, sc3, sc4], param_list_cur)):
+        with col:
+            v = st.number_input(
+                f'SN {ci+1}',
+                min_value=1.0, max_value=15.0,
+                value=float(default_sn),
+                step=0.5, format='%.1f',
+                key=f'flex_sn_input_{ci}')
+            sn_inputs.append(v)
+
+    if st.button('🔄 คำนวณ ESAL ทั้ง 4 ค่า', type='primary',
+                 use_container_width=True, key='flex_calc_sn4'):
+        try:
+            new_tbl = compute_w18_sn_table(
+                ed['traffic_data'], ed['pt'],
+                ed['lane_factor'], ed['direction_factor'],
+                sn_grid=sn_inputs)
+            st.session_state['flex_esal_data']['sn_table']   = new_tbl
+            st.session_state['flex_esal_data']['param_list'] = sn_inputs
+            # set flex_w18 = ค่าแรก (default)
+            st.session_state['_flex_w18_pending'] = float(new_tbl[0]['W18'])
+            st.rerun()
+        except Exception as e:
+            st.error(f'คำนวณไม่ได้: {e}')
+
+    # ── W18–SN Mapping Cards ──────────────────────────────
+    # ถ้า sn_table ไม่มีใน cache ให้คำนวณใหม่จาก sn_inputs
     if not sn_tbl and ed.get('traffic_data'):
         try:
             sn_tbl = compute_w18_sn_table(
                 ed['traffic_data'], ed['pt'],
                 ed['lane_factor'], ed['direction_factor'],
-                sn_grid=ed.get('param_list', None))
-            # update cache
+                sn_grid=sn_inputs)
             st.session_state['flex_esal_data']['sn_table'] = sn_tbl
         except Exception:
             sn_tbl = []
 
     if sn_tbl:
         _hr()
-        w18_design = float(st.session_state.get('flex_w18', W18))
+        w18_design = float(st.session_state.get('flex_w18',
+                           sn_tbl[0]['W18'] if sn_tbl else 0))
         _w18_sn_cards(sn_tbl, w18_design)
 
-    # Truck Factors
+    # Truck Factors + Traffic table
     if tf:
-        _hr()
         with st.expander('🔍 Truck Factors (LEF)', expanded=False):
-            st.markdown(
-                f'<div style="font-size:11px;color:#78909C;margin-bottom:6px">'
-                f'Pt={ed["pt"]:.1f} — คำนวณที่แต่ละ SN ใน grid</div>',
-                unsafe_allow_html=True)
             cols = st.columns(len(tf))
             for i, (code, val) in enumerate(tf.items()):
                 with cols[i]:
                     _mbox(code, f'{val:.4f}', '', '#BF360C', '#FBE9E7')
 
-    # Traffic table
     td = ed.get('traffic_data', [])
     if td:
         with st.expander('📋 ข้อมูลปริมาณจราจร', expanded=False):
@@ -433,33 +468,3 @@ def _show_esal_summary(ed: dict):
             st.dataframe(df, use_container_width=True, hide_index=True)
             if len(td) > 5:
                 st.caption(f'แสดง 5 จาก {len(td)} ปี')
-
-    # Override W18
-    _hr()
-    st.markdown(
-        '<div style="font-size:12px;font-weight:600;color:#BF360C;margin-bottom:4px">'
-        '🔧 ปรับแก้ W₁₈ ที่ใช้ออกแบบ</div>',
-        unsafe_allow_html=True)
-
-    c_ov1, c_ov2 = st.columns([2, 1])
-    with c_ov1:
-        st.number_input(
-            'W₁₈ ที่ใช้ออกแบบ (override ได้)',
-            min_value=10_000.0, max_value=500_000_000.0,
-            value=float(st.session_state.get('flex_w18', W18)),
-            step=100_000.0, format='%.0f', key='flex_w18',
-            help='ค่าเริ่มต้นคือ W18 จาก JSON — แก้ไขได้')
-    with c_ov2:
-        w18_cur = float(st.session_state.get('flex_w18', W18))
-        st.markdown(
-            f'<div style="background:#FBE9E7;border:1px solid #FFAB91;'
-            f'border-radius:8px;padding:8px;text-align:center;margin-top:4px">'
-            f'<div style="font-size:10px;color:#90A4AE">W₁₈ ที่ใช้</div>'
-            f'<div style="font-family:IBM Plex Mono,monospace;font-size:18px;'
-            f'font-weight:700;color:#BF360C">{w18_cur/1e6:.3f}M</div>'
-            f'</div>', unsafe_allow_html=True)
-
-    if abs(float(st.session_state.get('flex_w18', W18)) - W18) > 1000:
-        st.caption(
-            f'⚠️ W₁₈ ถูกแก้ไขจาก JSON ({W18:,.0f}) '
-            f'เป็น {st.session_state["flex_w18"]:,.0f}')
