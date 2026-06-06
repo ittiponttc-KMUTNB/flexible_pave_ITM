@@ -152,12 +152,26 @@ def _render_layers():
                     L['layer_coeff'] = MATERIALS[new_mat]['layer_coeff']
                     st.rerun()
             with h3:
-                new_t = st.number_input(
-                    'cm', min_value=1.0, max_value=200.0,
-                    value=float(L['thickness_cm']),
-                    step=1.0, format='%.0f',
-                    key=f'lt_{i}', label_visibility='collapsed')
-                L['thickness_cm'] = new_t
+                if is_ac and L.get('ac_sub'):
+                    # Lock — ความหนารวมมาจาก W+B+Base
+                    t_locked = float(L.get('wearing_cm', 5.0) +
+                                     L.get('binder_cm',  5.0) +
+                                     L.get('base_cm',    8.0))
+                    L['thickness_cm'] = t_locked
+                    st.markdown(
+                        f'<div style="background:#F5F5F5;border:1px solid #E0E0E0;'
+                        f'border-radius:5px;padding:5px 8px;text-align:center;'
+                        f'font-family:IBM Plex Mono,monospace;font-size:13px;'
+                        f'font-weight:600;color:#757575;margin-top:2px">'
+                        f'🔒 {t_locked:.0f}</div>',
+                        unsafe_allow_html=True)
+                else:
+                    new_t = st.number_input(
+                        'cm', min_value=1.0, max_value=200.0,
+                        value=float(L['thickness_cm']),
+                        step=1.0, format='%.0f',
+                        key=f'lt_{i}', label_visibility='collapsed')
+                    L['thickness_cm'] = new_t
             with h4:
                 # a_i — input ตรง, default จาก database, user แก้ได้
                 new_ai = st.number_input(
@@ -183,29 +197,61 @@ def _render_layers():
                     L['ac_sub'] = ac_sub
 
             # ── AC sublayer inputs ────────────────────────
+            # มาตรฐาน หล.-ม. 408/2532
+            _AC_SUB_RANGE = {
+                'wearing': (4.0, 7.0),
+                'binder':  (4.0, 8.0),
+                'base':    (7.0, 10.0),
+            }
             if is_ac and L.get('ac_sub'):
                 sc1, sc2, sc3 = st.columns(3)
                 with sc1:
-                    w = st.number_input('Wearing (cm)', 1.0, 50.0,
+                    w = st.number_input('Wearing (cm)', 1.0, 20.0,
                                         float(L.get('wearing_cm', 5.0)),
-                                        1.0, format='%.0f', key=f'lwear_{i}')
+                                        0.5, format='%.1f', key=f'lwear_{i}')
                     L['wearing_cm'] = w
+                    wmin, wmax = _AC_SUB_RANGE['wearing']
+                    if not (wmin <= w <= wmax):
+                        st.markdown(
+                            f'<div style="background:#FFF8E1;border:1px solid #FFCC80;'
+                            f'border-radius:5px;padding:4px 8px;font-size:11px;color:#E65100">'
+                            f'⚠️ Wearing {w:.1f} cm เกินช่วงมาตรฐาน '
+                            f'({wmin:.0f}–{wmax:.0f} cm)</div>',
+                            unsafe_allow_html=True)
                 with sc2:
-                    b = st.number_input('Binder (cm)', 0.0, 50.0,
+                    b = st.number_input('Binder (cm)', 1.0, 20.0,
                                         float(L.get('binder_cm', 5.0)),
-                                        1.0, format='%.0f', key=f'lbind_{i}')
+                                        0.5, format='%.1f', key=f'lbind_{i}')
                     L['binder_cm'] = b
+                    bmin, bmax = _AC_SUB_RANGE['binder']
+                    if not (bmin <= b <= bmax):
+                        st.markdown(
+                            f'<div style="background:#FFF8E1;border:1px solid #FFCC80;'
+                            f'border-radius:5px;padding:4px 8px;font-size:11px;color:#E65100">'
+                            f'⚠️ Binder {b:.1f} cm เกินช่วงมาตรฐาน '
+                            f'({bmin:.0f}–{bmax:.0f} cm)</div>',
+                            unsafe_allow_html=True)
                 with sc3:
-                    base_cm = st.number_input('Base (cm)', 0.0, 50.0,
-                                           float(L.get('base_cm', 5.0)),
-                                           1.0, format='%.0f', key=f'lbase_{i}')
+                    base_cm = st.number_input('Base (cm)', 1.0, 20.0,
+                                              float(L.get('base_cm', 8.0)),
+                                              0.5, format='%.1f', key=f'lbase_{i}')
                     L['base_cm'] = base_cm
+                    bcmin, bcmax = _AC_SUB_RANGE['base']
+                    if not (bcmin <= base_cm <= bcmax):
+                        st.markdown(
+                            f'<div style="background:#FFF8E1;border:1px solid #FFCC80;'
+                            f'border-radius:5px;padding:4px 8px;font-size:11px;color:#E65100">'
+                            f'⚠️ Base {base_cm:.1f} cm เกินช่วงมาตรฐาน '
+                            f'({bcmin:.0f}–{bcmax:.0f} cm)</div>',
+                            unsafe_allow_html=True)
+
                 total_ac = w + b + base_cm
                 L['thickness_cm'] = total_ac
                 st.markdown(
                     f'<div style="font-size:11px;color:#BF360C;font-family:'
-                    f'IBM Plex Mono,monospace">W+B+Base = {w:.0f}+{b:.0f}+'
-                    f'{base_cm:.0f} = {total_ac:.0f} cm</div>',
+                    f'IBM Plex Mono,monospace">'
+                    f'W+B+Base = {w:.1f}+{b:.1f}+{base_cm:.1f} = {total_ac:.1f} cm'
+                    f'</div>',
                     unsafe_allow_html=True)
 
             # ── badge row + pass/fail per layer ───────────
