@@ -121,8 +121,8 @@ def _render_layers():
         ai_def   = mat_data.get('layer_coeff', 0.10)
 
         with st.container(border=True):
-            # ── row 1: ลำดับ | วัสดุ | ความหนา | a_i ──────
-            h1, h2, h3, h4 = st.columns([0.4, 4, 1.2, 1.4])
+            # ── single row: เลขชั้น | วัสดุ | หนา | a_i | m_i | [AC sublayer] ──
+            h1, h2, h3, h4, h5, h6 = st.columns([0.35, 3.8, 1.0, 1.1, 1.1, 1.2])
             with h1:
                 st.markdown(
                     f'<div style="font-size:12px;font-weight:700;color:{_AC_BD};'
@@ -136,7 +136,6 @@ def _render_layers():
                 if new_mat != mat:
                     L['material']    = new_mat
                     L['layer_coeff'] = MATERIALS[new_mat]['layer_coeff']
-                    L['override_ai'] = False
                     st.rerun()
             with h3:
                 new_t = st.number_input(
@@ -146,46 +145,26 @@ def _render_layers():
                     key=f'lt_{i}', label_visibility='collapsed')
                 L['thickness_cm'] = new_t
             with h4:
-                if L.get('override_ai'):
-                    new_ai = st.number_input(
-                        'a_i', min_value=0.01, max_value=0.60,
-                        value=float(L.get('layer_coeff', ai_def)),
-                        step=0.005, format='%.3f',
-                        key=f'lai_{i}', label_visibility='collapsed')
-                    L['layer_coeff'] = new_ai
-                else:
-                    L['layer_coeff'] = ai_def
-                    st.markdown(
-                        f'<div style="background:#E3F2FD;border-radius:5px;'
-                        f'padding:5px 8px;text-align:center;margin-top:2px;'
-                        f'font-family:IBM Plex Mono,monospace;font-size:13px;'
-                        f'font-weight:600;color:#1565C0">{ai_def:.3f}</div>',
-                        unsafe_allow_html=True)
-
-            # ── row 2: override a_i | m_i | AC sublayer ────
-            r1, r2, r3 = st.columns([2, 2, 2])
-            with r1:
-                ov = st.checkbox(
-                    'Override a_i', value=L.get('override_ai', False),
-                    key=f'lov_{i}')
-                L['override_ai'] = ov
-            with r2:
-                # m_i — number input ตรง, ไม่มี dropdown
+                # a_i — input ตรง, default จาก database, user แก้ได้
+                new_ai = st.number_input(
+                    'a_i', min_value=0.01, max_value=0.60,
+                    value=float(L.get('layer_coeff', ai_def)),
+                    step=0.005, format='%.3f',
+                    key=f'lai_{i}', label_visibility='collapsed')
+                L['layer_coeff'] = new_ai
+            with h5:
+                # m_i — input ตรง, max ต่างกันตาม layer type
                 mi_max = 1.1 if is_ac else 1.4
-                mi_val = float(L.get('drainage_coeff', 1.0))
-                mi_val = min(mi_val, mi_max)  # clamp ถ้าเกิน
+                mi_val = min(float(L.get('drainage_coeff', 1.0)), mi_max)
                 new_mi = st.number_input(
-                    f'm_i (max {mi_max:.1f})',
-                    min_value=0.40, max_value=mi_max,
-                    value=mi_val,
-                    step=0.05, format='%.2f',
-                    key=f'lmi_{i}')
+                    f'm_i', min_value=0.40, max_value=mi_max,
+                    value=mi_val, step=0.05, format='%.2f',
+                    key=f'lmi_{i}', label_visibility='collapsed')
                 L['drainage_coeff'] = new_mi
-            with r3:
+            with h6:
                 if is_ac:
                     ac_sub = st.checkbox(
-                        'แบ่งชั้นย่อย AC',
-                        value=L.get('ac_sub', False),
+                        'แบ่ง AC', value=L.get('ac_sub', False),
                         key=f'lacsub_{i}')
                     L['ac_sub'] = ac_sub
 
@@ -215,18 +194,35 @@ def _render_layers():
                     f'{base_cm:.0f} = {total_ac:.0f} cm</div>',
                     unsafe_allow_html=True)
 
-            # ── badge row ─────────────────────────────────
-            ai  = L['layer_coeff']
-            mi  = L['drainage_coeff']
-            t   = L['thickness_cm']
-            dsn = round(ai * (t / 2.54) * mi, 3)
+            # ── badge row + pass/fail per layer ───────────
+            ai   = L['layer_coeff']
+            mi   = L['drainage_coeff']
+            t    = L['thickness_cm']
+            dsn  = round(ai * (t / 2.54) * mi, 3)
             mr_l = mat_data.get('mr_psi', 0)
+            # pass/fail คำนวณจาก session state ถ้ามีผลแล้ว
+            pf_html = ''
+            calc_res = st.session_state.get('flex_calc_results')
+            if calc_res and i < len(calc_res.get('layers', [])):
+                lr = calc_res['layers'][i]
+                d_min = lr['min_thickness_cm']
+                d_des = lr['design_thickness_cm']
+                if lr['is_ok']:
+                    pf_html = _badge(
+                        f'✅ ผ่าน (Dmin={d_min:.1f} ซม.)',
+                        '#E8F5E9', '#1B5E20')
+                else:
+                    short = d_min - d_des
+                    pf_html = _badge(
+                        f'⚠️ ต้องการ Dmin={d_min:.1f} ซม. (กรอกอยู่ {d_des:.0f} ซม.)',
+                        '#FFF8E1', '#E65100')
             st.markdown(
                 f'{_badge(f"a_i={ai:.3f}", "#E3F2FD", "#0D47A1")}&nbsp;'
                 f'{_badge(f"m_i={mi:.2f}", "#E8F5E9", "#1B5E20")}&nbsp;'
                 f'{_badge(f"D={t:.0f} cm", "#FFF3CD", "#E65100")}&nbsp;'
                 f'{_badge(f"ΔSN={dsn:.3f}", "#FBE9E7", "#BF360C")}&nbsp;'
-                f'{_badge(f"Mr={mr_l:,} psi", "#F3E5F5", "#4A148C")}',
+                f'{_badge(f"Mr={mr_l:,} psi", "#F3E5F5", "#4A148C")}'
+                + (f'&nbsp;&nbsp;{pf_html}' if pf_html else ''),
                 unsafe_allow_html=True)
 
         layers[i] = L
@@ -323,7 +319,7 @@ def _calc_and_render_right(layers, cbr, W18, Zr, So, delta_psi):
     # ── cross-section ──────────────────────────────────────
     try:
         fig = plot_flex_structure(
-            res['layers'], subgrade_cbr=cbr,
+            res['layers'], subgrade_cbr=None,
             title=st.session_state.get('flex_project_name', '') or 'Flexible Pavement')
         buf = fig_to_bytes(fig)
         import matplotlib.pyplot as plt
