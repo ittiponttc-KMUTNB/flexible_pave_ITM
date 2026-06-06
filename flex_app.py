@@ -183,11 +183,10 @@ def main():
     </div>''', unsafe_allow_html=True)
 
     # ── Tabs ──────────────────────────────────────────────
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3 = st.tabs([
         '🚦 Tab 1 — Traffic & W18',
-        '🌍 Tab 2 — Subgrade & Layers',
-        '🏗️ Tab 3 — Design',
-        '📄 Tab 4 — Report',
+        '🏗️ Tab 2 — Design',
+        '📄 Tab 3 — Report',
     ])
 
     with tab1:
@@ -197,10 +196,7 @@ def main():
         render_flex_tab2()
 
     with tab3:
-        st.info('Tab 3 — Design (กำลังพัฒนา)')
-
-    with tab4:
-        st.info('Tab 4 — Report (กำลังพัฒนา)')
+        st.info('Tab 3 — Report (กำลังพัฒนา)')
 
     st.markdown('---')
     st.caption('พัฒนาโดย รศ.ดร.อิทธิพล มีผล · ภาควิชาครุศาสตร์โยธา · มจพ.')
