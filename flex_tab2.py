@@ -151,20 +151,11 @@ def _render_layers():
                     L['material']    = new_mat
                     L['layer_coeff'] = MATERIALS[new_mat]['layer_coeff']
                     st.rerun()
+            # placeholder สำหรับ lock badge — จะถูก fill หลัง sublayer render
+            _lock_ph = None
             with h3:
                 if is_ac and L.get('ac_sub'):
-                    # Lock — ความหนารวมมาจาก W+B+Base
-                    t_locked = float(L.get('wearing_cm', 5.0) +
-                                     L.get('binder_cm',  5.0) +
-                                     L.get('base_cm',    8.0))
-                    L['thickness_cm'] = t_locked
-                    st.markdown(
-                        f'<div style="background:#F5F5F5;border:1px solid #E0E0E0;'
-                        f'border-radius:5px;padding:5px 8px;text-align:center;'
-                        f'font-family:IBM Plex Mono,monospace;font-size:13px;'
-                        f'font-weight:600;color:#757575;margin-top:2px">'
-                        f'🔒 {t_locked:.0f}</div>',
-                        unsafe_allow_html=True)
+                    _lock_ph = st.empty()
                 else:
                     new_t = st.number_input(
                         'cm', min_value=1.0, max_value=200.0,
@@ -247,6 +238,15 @@ def _render_layers():
 
                 total_ac = w + b + base_cm
                 L['thickness_cm'] = total_ac
+                # fill lock placeholder ด้วยค่า W+B+Base จริง
+                if _lock_ph is not None:
+                    _lock_ph.markdown(
+                        f'<div style="background:#F5F5F5;border:1px solid #E0E0E0;'
+                        f'border-radius:5px;padding:5px 8px;text-align:center;'
+                        f'font-family:IBM Plex Mono,monospace;font-size:13px;'
+                        f'font-weight:600;color:#757575;margin-top:2px">'
+                        f'🔒 {total_ac:.0f}</div>',
+                        unsafe_allow_html=True)
                 st.markdown(
                     f'<div style="font-size:11px;color:#BF360C;font-family:'
                     f'IBM Plex Mono,monospace">'
