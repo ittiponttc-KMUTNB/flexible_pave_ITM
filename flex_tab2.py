@@ -353,13 +353,41 @@ def render_flex_tab2():
     _init_ss()
 
     # ── พารามิเตอร์จาก Tab 1 ──────────────────────────────
-    W18       = float(st.session_state.get('flex_w18', 0))
     R         = int(st.session_state.get('flex_reliability', 90))
     So        = float(st.session_state.get('flex_so', 0.45))
     p0        = float(st.session_state.get('flex_p0', 4.2))
     pt        = float(st.session_state.get('flex_pt', 2.5))
     Zr        = get_zr(R)
     delta_psi = p0 - pt
+
+    # ── W18 selector ──────────────────────────────────────
+    ed       = st.session_state.get('flex_esal_data')
+    sn_tbl   = ed.get('sn_table', []) if ed else []
+    w18_mode = st.session_state.get('flex_w18_mode', 'manual')
+
+    if sn_tbl and w18_mode == 'json':
+        # JSON mode: มี sn_table → ให้เลือก SN
+        options     = [f"SN {r['SN']:.1f}  →  W₁₈ = {r['W18']:,.0f}" for r in sn_tbl]
+        sel_key     = 'flex_w18_sn_sel'
+        saved_sel   = st.session_state.get(sel_key, options[0])
+        sel_idx     = options.index(saved_sel) if saved_sel in options else 0
+        with st.container(border=True):
+            st.markdown(
+                '<div style="font-size:12px;font-weight:700;color:#BF360C;'
+                'margin-bottom:6px">📌 เลือก W₁₈ จาก SN (Tab 1)</div>',
+                unsafe_allow_html=True)
+            chosen = st.radio(
+                'เลือก W₁₈',
+                options=options,
+                index=sel_idx,
+                key=sel_key,
+                horizontal=True,
+                label_visibility='collapsed')
+            chosen_idx = options.index(chosen)
+            W18 = float(sn_tbl[chosen_idx]['W18'])
+            st.session_state['flex_w18'] = W18
+    else:
+        W18 = float(st.session_state.get('flex_w18', 0))
 
     if W18 <= 0:
         st.warning('⚠️ กรุณากรอก W₁₈ ใน Tab 1 ก่อน')
