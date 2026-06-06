@@ -223,8 +223,8 @@ def generate_pdf(
     hdr_row = [
         p('วัสดุ', s_cellb),
         pc('D\n(cm)'), pc('a\u1d62'), pc('m\u1d62'),
-        pc('ΔSN'), pc('ΣSN'), pc('SN_req\nชั้นนี้'),
-        pc('D\u1d50\u1d35\u207f\n(cm)'), pc('สถานะ'),
+        pc('ΔSN'), pc('ΣSN'), pc('SN_req'),
+        pc('D_min\n(cm)'), pc('สถานะ'),
     ]
     tbl_rows = [hdr_row]
 
@@ -268,7 +268,7 @@ def generate_pdf(
     layer_tbl = Table(tbl_rows, colWidths=col_w, repeatRows=1)
     n = len(tbl_rows)
     layer_tbl.setStyle(TableStyle([
-        ('BACKGROUND',  (0,0), (-1,0), _RED),
+        ('BACKGROUND',  (0,0), (-1,0), colors.HexColor('#D84315')),
         ('TEXTCOLOR',   (0,0), (-1,0), _WHITE),
         ('FONTNAME',    (0,0), (-1,0), fn_bold),
         ('FONTSIZE',    (0,0), (-1,-1), 7),
@@ -340,7 +340,7 @@ def generate_pdf(
                     repeatRows=1)
     nr = len(ref_rows)
     ref_tbl.setStyle(TableStyle([
-        ('BACKGROUND',  (0,0), (-1,0), colors.HexColor('#546E7A')),
+        ('BACKGROUND',  (0,0), (-1,0), colors.HexColor('#78909C')),
         ('TEXTCOLOR',   (0,0), (-1,0), _WHITE),
         ('FONTNAME',    (0,0), (-1,-1), fn),
         ('FONTNAME',    (0,0), (-1,0),  fn_bold),
