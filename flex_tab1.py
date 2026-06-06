@@ -393,55 +393,15 @@ def _show_esal_summary(ed: dict):
         sn_str = ', '.join(str(s) for s in param_list) if param_list else 'Default grid'
         _row('SN ที่คำนวณ', sn_str)
 
-    # ── กำหนด SN 4 ค่า สำหรับคำนวณ ESAL ──────────────────
-    _hr()
-    st.markdown(
-        '<div style="font-size:12px;font-weight:700;color:#BF360C;margin-bottom:6px">'
-        '⚙️ กำหนด SN สำหรับคำนวณ ESAL (4 ค่า)</div>',
-        unsafe_allow_html=True)
-
-    # โหลดค่า SN จาก param_list หรือ default
-    param_list_cur = ed.get('param_list') or [5.0, 6.0, 7.0, 8.0]
-    while len(param_list_cur) < 4:
-        param_list_cur.append(param_list_cur[-1] + 1.0)
-    param_list_cur = param_list_cur[:4]
-
-    sc1, sc2, sc3, sc4 = st.columns(4)
-    sn_inputs = []
-    for ci, (col, default_sn) in enumerate(zip(
-            [sc1, sc2, sc3, sc4], param_list_cur)):
-        with col:
-            v = st.number_input(
-                f'SN {ci+1}',
-                min_value=1.0, max_value=15.0,
-                value=float(default_sn),
-                step=0.5, format='%.1f',
-                key=f'flex_sn_input_{ci}')
-            sn_inputs.append(v)
-
-    if st.button('🔄 คำนวณ ESAL ทั้ง 4 ค่า', type='primary',
-                 use_container_width=True, key='flex_calc_sn4'):
-        try:
-            new_tbl = compute_w18_sn_table(
-                ed['traffic_data'], ed['pt'],
-                ed['lane_factor'], ed['direction_factor'],
-                sn_grid=sn_inputs)
-            st.session_state['flex_esal_data']['sn_table']   = new_tbl
-            st.session_state['flex_esal_data']['param_list'] = sn_inputs
-            # set flex_w18 = ค่าแรก (default)
-            st.session_state['_flex_w18_pending'] = float(new_tbl[0]['W18'])
-            st.rerun()
-        except Exception as e:
-            st.error(f'คำนวณไม่ได้: {e}')
-
+    # ── W18–SN Mapping Cards (อ่านจาก JSON โดยตรง) ──────────────
     # ── W18–SN Mapping Cards ──────────────────────────────
-    # ถ้า sn_table ไม่มีใน cache ให้คำนวณใหม่จาก sn_inputs
+    # ถ้า sn_table ไม่มีใน cache ให้คำนวณใหม่จาก param_list ใน JSON
     if not sn_tbl and ed.get('traffic_data'):
         try:
             sn_tbl = compute_w18_sn_table(
                 ed['traffic_data'], ed['pt'],
                 ed['lane_factor'], ed['direction_factor'],
-                sn_grid=sn_inputs)
+                sn_grid=ed.get('param_list', None))
             st.session_state['flex_esal_data']['sn_table'] = sn_tbl
         except Exception:
             sn_tbl = []
