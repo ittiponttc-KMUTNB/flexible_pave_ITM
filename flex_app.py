@@ -10,6 +10,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from flex_tab1 import render_flex_tab1
+from flex_tab2 import render_flex_tab2
 
 # ============================================================
 # CSS — Theme เดียวกับ Rigid Pavement (app.py)
@@ -193,7 +194,7 @@ def main():
         render_flex_tab1()
 
     with tab2:
-        st.info('Tab 2 — Subgrade & Layers (กำลังพัฒนา)')
+        render_flex_tab2()
 
     with tab3:
         st.info('Tab 3 — Design (กำลังพัฒนา)')
