@@ -513,9 +513,11 @@ _DARK_LAYERS = {'ผิวทางลาดยาง AC', 'ผิวทาง�
                 'พื้นทางวัสดุหมุนเวียน (Recycling)'}
 
 
-def plot_flex_structure(layer_results: list, subgrade_cbr: float = 4.0,
+def plot_flex_structure(layer_results: list, subgrade_cbr: float | None = None,
                         title: str = 'Flexible Pavement Structure') -> plt.Figure:
-    """วาดรูปตัดขวางโครงสร้าง Flexible Pavement"""
+    """วาดรูปตัดขวางโครงสร้าง Flexible Pavement
+    subgrade_cbr=None → ไม่แสดงชั้น Subgrade
+    """
     valid = [l for l in layer_results if l.get('design_thickness_cm', 0) > 0]
     if not valid:
         fig, ax = plt.subplots(figsize=(7, 4))
@@ -523,15 +525,18 @@ def plot_flex_structure(layer_results: list, subgrade_cbr: float = 4.0,
         ax.axis('off')
         return fig
 
-    # เพิ่มชั้น subgrade แสดงผล
-    display_layers = valid + [{
-        'material':             'ดินเดิม / Subgrade',
-        'design_thickness_cm':  30,
-        'a_i': 0, 'm_i': 1.0, 'sn_contribution': 0,
-        'cumulative_sn': 0,
-        'short_name': f'Subgrade (CBR={subgrade_cbr:.1f}%)',
-        'mr_psi': 0, 'mr_mpa': 0,
-    }]
+    # เพิ่มชั้น subgrade ถ้าระบุ CBR
+    if subgrade_cbr is not None:
+        display_layers = valid + [{
+            'material':             'ดินเดิม / Subgrade',
+            'design_thickness_cm':  30,
+            'a_i': 0, 'm_i': 1.0, 'sn_contribution': 0,
+            'cumulative_sn': 0,
+            'short_name': f'Subgrade (CBR={subgrade_cbr:.1f}%)',
+            'mr_psi': 0, 'mr_mpa': 0,
+        }]
+    else:
+        display_layers = valid
 
     total = sum(l['design_thickness_cm'] for l in display_layers)
     min_disp = max(total * 0.07, 5)
