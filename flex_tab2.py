@@ -85,11 +85,34 @@ def _get_mi(quality, saturation):
 # Left panel — Layer Table
 # ============================================================
 def _render_layers():
-    layers = st.session_state['flex_layers']
-    n = len(layers)
-    delete_idx = None
-    move = None  # (idx, direction)
+    import copy
 
+    # ── Slider จำนวนชั้น ──────────────────────────────────
+    n_target = st.slider(
+        'จำนวนชั้นทาง', min_value=1, max_value=5,
+        value=len(st.session_state['flex_layers']),
+        key='flex_n_layers',
+        help='เลื่อนเพื่อเพิ่ม/ลดจำนวนชั้น')
+
+    layers = st.session_state['flex_layers']
+
+    # ปรับ list ให้ตรงกับ slider
+    while len(layers) < n_target:
+        defaults = [
+            'ผิวทางลาดยาง AC',
+            'พื้นทางหินคลุกปรับปรุงคุณภาพด้วยปูนซีเมนต์ (Cement Treated Base)',
+            'รองพื้นทางวัสดุมวลรวม CBR 25%',
+            'วัสดุคัดเลือก ก',
+            'รองพื้นทางวัสดุมวลรวม CBR 25%',
+        ]
+        mat = defaults[len(layers)] if len(layers) < len(defaults) else 'รองพื้นทางวัสดุมวลรวม CBR 25%'
+        layers.append(_layer_base(mat))
+    while len(layers) > n_target:
+        layers.pop()
+
+    st.session_state['flex_layers'] = layers
+
+    # ── Layer cards ────────────────────────────────────────
     for i, L in enumerate(layers):
         mat      = L['material']
         mat_data = MATERIALS.get(mat, {})
@@ -98,8 +121,8 @@ def _render_layers():
         ai_def   = mat_data.get('layer_coeff', 0.10)
 
         with st.container(border=True):
-            # ── header ──────────────────────────────────────
-            h1, h2, h3, h4, h5 = st.columns([0.4, 4, 1.2, 1.2, 0.8])
+            # ── row 1: ลำดับ | วัสดุ | ความหนา | a_i ──────
+            h1, h2, h3, h4 = st.columns([0.4, 4, 1.2, 1.4])
             with h1:
                 st.markdown(
                     f'<div style="font-size:12px;font-weight:700;color:{_AC_BD};'
@@ -123,7 +146,6 @@ def _render_layers():
                     key=f'lt_{i}', label_visibility='collapsed')
                 L['thickness_cm'] = new_t
             with h4:
-                # a_i — inline toggle
                 if L.get('override_ai'):
                     new_ai = st.number_input(
                         'a_i', min_value=0.01, max_value=0.60,
@@ -139,65 +161,35 @@ def _render_layers():
                         f'font-family:IBM Plex Mono,monospace;font-size:13px;'
                         f'font-weight:600;color:#1565C0">{ai_def:.3f}</div>',
                         unsafe_allow_html=True)
-            with h5:
-                u1, u2 = st.columns(2)
-                with u1:
-                    if st.button('↑', key=f'lup_{i}',
-                                 disabled=(i==0), use_container_width=True):
-                        move = (i, -1)
-                with u2:
-                    if st.button('↓', key=f'ldn_{i}',
-                                 disabled=(i==n-1), use_container_width=True):
-                        move = (i, 1)
 
-            # ── row 2: checkboxes + m_i + delete ──────────────
-            r1, r2, r3, r4 = st.columns([2, 2, 2, 1])
+            # ── row 2: override a_i | m_i | AC sublayer ────
+            r1, r2, r3 = st.columns([2, 2, 2])
             with r1:
                 ov = st.checkbox(
-                    f'Override a_i', value=L.get('override_ai', False),
+                    'Override a_i', value=L.get('override_ai', False),
                     key=f'lov_{i}')
                 L['override_ai'] = ov
             with r2:
-                # m_i dropdown inline
-                if is_ac:
-                    L['drainage_coeff'] = 1.0
-                    st.markdown(
-                        '<span style="font-size:11px;color:#78909C">'
-                        'm_i = 1.00 (fixed)</span>',
-                        unsafe_allow_html=True)
-                else:
-                    dq_opts  = list(DRAINAGE_TABLE.keys())
-                    sat_opts = ['<1%', '1-5%', '5-25%', '>25%']
-                    dq_k     = f'ldq_{i}'
-                    sat_k    = f'lsat_{i}'
-                    if dq_k  not in st.session_state: st.session_state[dq_k]  = 'Good'
-                    if sat_k not in st.session_state: st.session_state[sat_k] = '1-5%'
-                    dq  = st.selectbox('Quality', dq_opts,
-                                       index=dq_opts.index(st.session_state[dq_k]),
-                                       key=dq_k, label_visibility='collapsed')
-                    sat = st.selectbox('Sat', sat_opts,
-                                       index=sat_opts.index(st.session_state[sat_k]),
-                                       key=sat_k, label_visibility='collapsed')
-                    mi = _get_mi(dq, sat)
-                    L['drainage_coeff'] = mi
-                    st.markdown(
-                        f'<span style="font-size:11px;color:#2E7D32;'
-                        f'font-family:IBM Plex Mono,monospace">m_i={mi:.2f}</span>',
-                        unsafe_allow_html=True)
+                # m_i — number input ตรง, ไม่มี dropdown
+                mi_max = 1.1 if is_ac else 1.4
+                mi_val = float(L.get('drainage_coeff', 1.0))
+                mi_val = min(mi_val, mi_max)  # clamp ถ้าเกิน
+                new_mi = st.number_input(
+                    f'm_i (max {mi_max:.1f})',
+                    min_value=0.40, max_value=mi_max,
+                    value=mi_val,
+                    step=0.05, format='%.2f',
+                    key=f'lmi_{i}')
+                L['drainage_coeff'] = new_mi
             with r3:
-                # AC sublayer checkbox
                 if is_ac:
                     ac_sub = st.checkbox(
-                        'แบ่งชั้นย่อย AC', value=L.get('ac_sub', False),
+                        'แบ่งชั้นย่อย AC',
+                        value=L.get('ac_sub', False),
                         key=f'lacsub_{i}')
                     L['ac_sub'] = ac_sub
-                else:
-                    st.markdown('')
-            with r4:
-                if st.button('🗑️', key=f'ldel_{i}', use_container_width=True):
-                    delete_idx = i
 
-            # ── AC sublayer inputs ────────────────────────────
+            # ── AC sublayer inputs ────────────────────────
             if is_ac and L.get('ac_sub'):
                 sc1, sc2, sc3 = st.columns(3)
                 with sc1:
@@ -211,23 +203,23 @@ def _render_layers():
                                         1.0, format='%.0f', key=f'lbind_{i}')
                     L['binder_cm'] = b
                 with sc3:
-                    base = st.number_input('Base (cm)', 0.0, 50.0,
+                    base_cm = st.number_input('Base (cm)', 0.0, 50.0,
                                            float(L.get('base_cm', 5.0)),
                                            1.0, format='%.0f', key=f'lbase_{i}')
-                    L['base_cm'] = base
-                total_ac = w + b + base
+                    L['base_cm'] = base_cm
+                total_ac = w + b + base_cm
                 L['thickness_cm'] = total_ac
                 st.markdown(
                     f'<div style="font-size:11px;color:#BF360C;font-family:'
                     f'IBM Plex Mono,monospace">W+B+Base = {w:.0f}+{b:.0f}+'
-                    f'{base:.0f} = {total_ac:.0f} cm → ความหนารวม AC</div>',
+                    f'{base_cm:.0f} = {total_ac:.0f} cm</div>',
                     unsafe_allow_html=True)
 
-            # ── preview badge row ──────────────────────────────
-            ai   = L['layer_coeff']
-            mi   = L['drainage_coeff']
-            t    = L['thickness_cm']
-            dsn  = round(ai * (t / 2.54) * mi, 3)
+            # ── badge row ─────────────────────────────────
+            ai  = L['layer_coeff']
+            mi  = L['drainage_coeff']
+            t   = L['thickness_cm']
+            dsn = round(ai * (t / 2.54) * mi, 3)
             mr_l = mat_data.get('mr_psi', 0)
             st.markdown(
                 f'{_badge(f"a_i={ai:.3f}", "#E3F2FD", "#0D47A1")}&nbsp;'
@@ -239,31 +231,7 @@ def _render_layers():
 
         layers[i] = L
 
-    # apply move
-    if move:
-        idx, d = move
-        layers[idx], layers[idx+d] = layers[idx+d], layers[idx]
-        st.session_state['flex_layers'] = layers
-        st.rerun()
-    if delete_idx is not None:
-        layers.pop(delete_idx)
-        st.session_state['flex_layers'] = layers
-        st.rerun()
-
     st.session_state['flex_layers'] = layers
-
-    # ── add layer ──────────────────────────────────────────
-    ca, cb = st.columns([1, 3])
-    with ca:
-        if st.button('➕ เพิ่มชั้น', use_container_width=True):
-            layers.append(_layer_base('รองพื้นทางวัสดุมวลรวม CBR 25%'))
-            st.session_state['flex_layers'] = layers
-            st.rerun()
-    with cb:
-        st.markdown(
-            f'<span style="font-size:11px;color:#78909C">'
-            f'{len(layers)} ชั้น | ↑↓ เรียงลำดับ | 🗑️ ลบ</span>',
-            unsafe_allow_html=True)
 
 # ============================================================
 # Right panel — calculate + summary + cross-section
