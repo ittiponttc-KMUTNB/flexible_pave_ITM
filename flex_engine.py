@@ -32,7 +32,7 @@ def get_zr(reliability: int) -> float:
 
 def mr_from_cbr(cbr: float) -> float:
     """MR (psi) จาก CBR — กรมทางหลวง"""
-    return 1500.0 * cbr if cbr < 10 else 1000.0 + 555.0 * cbr
+    return 1500.0 * cbr if cbr <= 10 else 1000.0 + 555.0 * cbr
 
 # ============================================================
 # 2. AASHTO 1993 Flexible — Core Equation
