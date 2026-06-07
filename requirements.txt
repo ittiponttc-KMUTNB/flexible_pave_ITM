@@ -6,3 +6,4 @@ matplotlib>=3.8.0
 python-docx>=1.1.0
 pillow>=10.2.0
 reportlab>=4.0.0
+pythainlp>=5.0.0
