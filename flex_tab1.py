@@ -352,6 +352,17 @@ def _show_esal_summary(ed: dict):
     sn_tbl  = ed.get('sn_table', [])
 
     st.success(f'✅ โหลดสำเร็จ: {ed["filename"]}')
+
+    # ── เตือนถ้า pt ใน JSON ไม่ตรงกับ Design Parameters ──
+    pt_json    = ed['pt']
+    pt_design  = float(st.session_state.get('flex_pt', 2.5))
+    if abs(pt_json - pt_design) > 0.01:
+        st.warning(
+            f'⚠️ **pt ไม่ตรงกัน** — '
+            f'JSON ใช้ pt = **{pt_json:.1f}** '
+            f'แต่ Design Parameters ตั้งไว้ที่ pt = **{pt_design:.1f}**\n\n'
+            f'W₁₈ ใน cards คำนวณด้วย pt = {pt_json:.1f} (ตาม JSON) '
+            f'กรุณาตรวจสอบว่าต้องการใช้ค่าใด')
     _hr()
 
     # parameters
