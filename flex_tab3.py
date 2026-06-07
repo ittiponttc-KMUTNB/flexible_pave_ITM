@@ -176,9 +176,9 @@ def generate_pdf(
         ('SN_provided (รวม)', f'{sn_prov:.2f}'),
     ]
 
-    def mini_table(pairs, bg):
+    def mini_table(pairs, bg, col_widths=None):
         rows = kv_rows(pairs)
-        t = Table(rows, colWidths=[4.50*cm, 3.50*cm])
+        t = Table(rows, colWidths=col_widths or [4.50*cm, 3.50*cm])
         t.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,-1), bg),
             ('FONTNAME',   (0,0), (-1,-1), fn),
@@ -191,8 +191,8 @@ def generate_pdf(
         ]))
         return t
 
-    p_tbl = mini_table(param_pairs, _LTYLW)
-    s_tbl = mini_table(sub_pairs,   _LTBLU)
+    p_tbl = mini_table(param_pairs, _LTYLW, [5.20*cm, 2.80*cm])
+    s_tbl = mini_table(sub_pairs,   _LTBLU, [6.00*cm, 3.40*cm])
 
     def sec_label(text):
         return Paragraph(text, s_sec)
@@ -224,21 +224,29 @@ def generate_pdf(
         p('วัสดุ', s_cellb),
         pc('D\n(cm)'), pc('a\u1d62'), pc('m\u1d62'),
         pc('ΔSN'), pc('ΣSN'), pc('SN_req'),
-        pc('D_min\n(cm)'), pc('สถานะ'),
+        pc('D_min\n(cm)'), pc('chk'),
     ]
     tbl_rows = [hdr_row]
 
+    # ตัดคำนำหน้าที่ยาวออก
+    def _short_mat(name):
+        for prefix in ['ผิวทางลาดยาง ', 'พื้นทาง', 'รองพื้นทาง']:
+            if name.startswith(prefix):
+                return name[len(prefix):]
+        return name
+
     for L in res.get('layers', []):
         mat_full = L.get('material', L.get('short_name', ''))
+        mat_disp = _short_mat(mat_full)
         # ถ้า AC sublayer
         ac_sub = L.get('ac_sublayers')
         if ac_sub:
             w  = ac_sub.get('wearing_cm', 0)
             b  = ac_sub.get('binder_cm',  0)
             bc = ac_sub.get('base_cm',    0)
-            mat_txt = f'{mat_full}<br/><font size="7" color="#78909C">W {w:.0f}+B {b:.0f}+Base {bc:.0f} cm</font>'
+            mat_txt = f'{mat_disp}<br/><font size="7" color="#78909C">W {w:.0f}+B {b:.0f}+Base {bc:.0f} cm</font>'
         else:
-            mat_txt = mat_full
+            mat_txt = mat_disp
 
         dmin = L['min_thickness_cm']
         dmin_str = f"{dmin:.1f}" if dmin > 0 else '—'
@@ -265,15 +273,16 @@ def generate_pdf(
         pr(''), pr(''), pr(''), pr(''),
     ])
 
-    layer_tbl = Table(tbl_rows, colWidths=col_w, repeatRows=1)
+    layer_tbl = Table(tbl_rows, colWidths=col_w, repeatRows=1,
+                     rowHeights=[None] + [0.55*cm]*(len(tbl_rows)-1))
     n = len(tbl_rows)
     layer_tbl.setStyle(TableStyle([
         ('BACKGROUND',  (0,0), (-1,0), colors.HexColor('#D84315')),
         ('TEXTCOLOR',   (0,0), (-1,0), _WHITE),
         ('FONTNAME',    (0,0), (-1,0), fn_bold),
         ('FONTSIZE',    (0,0), (-1,-1), 7),
-        ('TOPPADDING',  (0,0), (-1,-1), 2),
-        ('BOTTOMPADDING',(0,0),(-1,-1), 2),
+        ('TOPPADDING',  (0,0), (-1,-1), 3),
+        ('BOTTOMPADDING',(0,0),(-1,-1), 3),
         ('LINEBELOW',   (0,1), (-1,-2), 0.3, colors.HexColor('#E0E0E0')),
         ('BACKGROUND',  (0,n-1), (-1,n-1), _GREY),
         ('FONTNAME',    (0,n-1), (-1,n-1), fn_bold),
@@ -345,8 +354,8 @@ def generate_pdf(
         ('FONTNAME',    (0,0), (-1,-1), fn),
         ('FONTNAME',    (0,0), (-1,0),  fn_bold),
         ('FONTSIZE',    (0,0), (-1,-1), 7),
-        ('TOPPADDING',  (0,0), (-1,-1), 2),
-        ('BOTTOMPADDING',(0,0),(-1,-1), 2),
+        ('TOPPADDING',  (0,0), (-1,-1), 3),
+        ('BOTTOMPADDING',(0,0),(-1,-1), 3),
         ('LINEBELOW',   (0,1), (-1,-2), 0.3, colors.HexColor('#E0E0E0')),
         ('BACKGROUND',  (0,nr-1),(-1,nr-1), _LTBLU),
         ('ROWBACKGROUNDS', (0,1),(-1,nr-2),
