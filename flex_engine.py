@@ -462,7 +462,7 @@ def _ealf_flex(L1_ton: float, L2: int, SN: float, pt: float) -> float:
     SN: Structural Number, pt: terminal serviceability
     """
     L1  = L1_ton * _TON_TO_KIP  # kip
-    Gt  = math.log10((4.5 - pt) / (4.5 - 1.5))
+    Gt  = math.log10((4.2 - pt) / (4.2 - 1.5))   # Flexible: 4.2 (ไม่ใช่ 4.5 ของ Rigid)
     Bx  = 0.4 + 0.081 * (L1 + L2) ** 3.23 / ((SN + 1) ** 5.19 * L2 ** 3.23)
     B18 = 0.4 + 0.081 * (18 + 1) ** 3.23 / ((SN + 1) ** 5.19 * 1.0 ** 3.23)
     return 10 ** (4.79 * math.log10(L1 + L2)
