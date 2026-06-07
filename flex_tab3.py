@@ -191,8 +191,8 @@ def generate_pdf(
         ]))
         return t
 
-    p_tbl = mini_table(param_pairs, _LTYLW, [5.20*cm, 2.80*cm])
-    s_tbl = mini_table(sub_pairs,   _LTBLU, [6.00*cm, 3.40*cm])
+    p_tbl = mini_table(param_pairs, _LTYLW, [6.50*cm, 3.50*cm])
+    s_tbl = mini_table(sub_pairs,   _LTBLU, [4.50*cm, 2.90*cm])
 
     def sec_label(text):
         return Paragraph(text, s_sec)
@@ -200,7 +200,7 @@ def generate_pdf(
     two_col = Table(
         [[sec_label('พารามิเตอร์การออกแบบ'), sec_label('Subgrade')],
          [p_tbl, s_tbl]],
-        colWidths=[8.00*cm, 9.40*cm])
+        colWidths=[10.00*cm, 7.40*cm])
     two_col.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
         ('LEFTPADDING',  (1,0), (1,-1), 12),
