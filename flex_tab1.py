@@ -175,7 +175,7 @@ def render_flex_tab1():
                 float(st.session_state.get('flex_p0', 4.2)),
                 0.1, key='flex_p0', format='%.1f')
 
-        c4, c5 = st.columns(2)
+        c4, c5, c6 = st.columns(3)
         with c4:
             pt = st.number_input(
                 'Terminal Serviceability (Pt)',
@@ -184,6 +184,17 @@ def render_flex_tab1():
                 0.5, key='flex_pt', format='%.1f',
                 help='Pt=2.5 ทางหลัก / Pt=2.0 ทางรอง — ตาม ทล.')
         with c5:
+            pt_val = float(st.session_state.get('flex_pt', 2.5))
+            st.markdown(
+                f'<div style="background:#FBE9E7;border:1px solid #FFAB91;'
+                f'border-radius:8px;padding:8px;text-align:center;margin-top:4px">'
+                f'<div style="font-size:10px;color:#90A4AE">Pt (Terminal Serviceability)</div>'
+                f'<div style="font-family:IBM Plex Mono,monospace;font-size:20px;'
+                f'font-weight:700;color:#BF360C">{pt_val:.1f}</div>'
+                f'<div style="font-size:10px;color:#90A4AE">'
+                f'{"ทางหลัก" if pt_val >= 2.5 else "ทางรอง"}</div>'
+                f'</div>', unsafe_allow_html=True)
+        with c6:
             p0_val = float(st.session_state.get('flex_p0', 4.2))
             pt_val = float(st.session_state.get('flex_pt', 2.5))
             d_psi  = p0_val - pt_val
