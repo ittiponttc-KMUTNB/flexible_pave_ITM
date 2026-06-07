@@ -19,8 +19,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 from flex_engine import (
-    mr_from_cbr, get_zr, MATERIALS,
+    mr_from_cbr, get_zr, MATERIALS, plot_flex_structure,
 )
+from flex_word_report import create_flex_word_report
 
 _AC_BD  = '#BF360C'
 _AC_BDL = '#FFAB91'
@@ -499,5 +500,69 @@ def render_flex_tab3():
                 data=st.session_state['flex_pdf_bytes'],
                 file_name=fname,
                 mime='application/pdf',
+                use_container_width=True,
+            )
+
+    # ── Export Word ──────────────────────────────────────
+    with st.container(border=True):
+        _card_title('📝 Export Word (ฉบับเต็ม)')
+
+        if st.button('🔄 สร้าง Word Report', type='primary',
+                     use_container_width=True):
+            with st.spinner('กำลังสร้าง Word...'):
+                try:
+                    W18_w    = float(st.session_state.get('flex_w18', 0))
+                    R_w      = int(st.session_state.get('flex_reliability', 90))
+                    So_w     = float(st.session_state.get('flex_so', 0.45))
+                    p0_w     = float(st.session_state.get('flex_p0', 4.2))
+                    pt_w     = float(st.session_state.get('flex_pt', 2.5))
+                    cbr_w    = float(st.session_state.get('flex_cbr', 4.0))
+                    mr_w     = float(st.session_state.get('flex_subgrade_mr',
+                                     mr_from_cbr(cbr_w)))
+                    Zr_w     = get_zr(R_w)
+                    sn_sel   = st.session_state.get('flex_w18_sn_sel', '')
+                    sn_used_w = 5.0
+                    if 'SN' in sn_sel:
+                        try:
+                            sn_used_w = float(sn_sel.split('SN')[1].split()[0])
+                        except Exception:
+                            pass
+
+                    # สร้างรูปตัดขวาง
+                    try:
+                        fig_w = plot_flex_structure(
+                            res['layers'],
+                            title=proj or 'Flexible Pavement')
+                    except Exception:
+                        fig_w = None
+
+                    word_buf = create_flex_word_report(
+                        project_name=proj,
+                        designer=designer,
+                        W18=W18_w,
+                        sn_used=sn_used_w,
+                        reliability=R_w,
+                        Zr=Zr_w,
+                        So=So_w,
+                        p0=p0_w,
+                        pt=pt_w,
+                        cbr=cbr_w,
+                        mr_sub=mr_w,
+                        calc_results=res,
+                        design_check=chk,
+                        fig=fig_w,
+                    )
+                    st.session_state['flex_word_bytes'] = word_buf.read()
+                    st.success('✅ Word พร้อมดาวน์โหลด')
+                except Exception as e:
+                    st.error(f'❌ สร้าง Word ไม่ได้: {e}')
+
+        if st.session_state.get('flex_word_bytes'):
+            wfname = f"flex_pavement_{(proj or 'report').replace(' ','_')}.docx"
+            st.download_button(
+                label='📥 ดาวน์โหลด Word',
+                data=st.session_state['flex_word_bytes'],
+                file_name=wfname,
+                mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                 use_container_width=True,
             )
