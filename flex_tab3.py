@@ -109,7 +109,7 @@ def generate_pdf(
 
     s_title   = S('title',   size=14, leading=18, bold=True,  color=_RED,   align='LEFT')
     s_sub     = S('sub',     size=8,  leading=11, color=_MDGREY)
-    s_proj    = S('proj',    size=9,  leading=12, bold=True)
+    s_proj    = S('proj',    size=9,  leading=12, bold=True, align='RIGHT')
     s_meta    = S('meta',    size=8,  leading=11, color=_MDGREY, align='RIGHT')
     s_sec     = S('sec',     size=8,  leading=11, bold=True, color=_MDGREY,
                   spaceBefore=6, spaceAfter=2)
