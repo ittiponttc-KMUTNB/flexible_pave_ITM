@@ -105,8 +105,13 @@ def _render_layers():
             'วัสดุคัดเลือก ก',
             'รองพื้นทางวัสดุมวลรวม CBR 25%',
         ]
-        mat = defaults[len(layers)] if len(layers) < len(defaults) else 'รองพื้นทางวัสดุมวลรวม CBR 25%'
-        layers.append(_layer_base(mat))
+        idx = len(layers)
+        mat = defaults[idx] if idx < len(defaults) else 'รองพื้นทางวัสดุมวลรวม CBR 25%'
+        new_layer = _layer_base(mat)
+        layers.append(new_layer)
+        # reset widget key ให้ใช้ค่าจาก database (ไม่ใช้ session state เก่า)
+        ai_correct = MATERIALS[mat]['layer_coeff']
+        st.session_state[f'lai_{idx}'] = ai_correct
     while len(layers) > n_target:
         layers.pop()
 
@@ -150,6 +155,8 @@ def _render_layers():
                 if new_mat != mat:
                     L['material']    = new_mat
                     L['layer_coeff'] = MATERIALS[new_mat]['layer_coeff']
+                    # reset widget key ให้ใช้ค่า database ใหม่
+                    st.session_state[f'lai_{i}'] = MATERIALS[new_mat]['layer_coeff']
                     st.rerun()
             # placeholder สำหรับ lock badge — จะถูก fill หลัง sublayer render
             _lock_ph = None
