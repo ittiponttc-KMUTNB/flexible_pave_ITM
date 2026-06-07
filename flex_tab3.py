@@ -507,20 +507,92 @@ def render_flex_tab3():
     with st.container(border=True):
         _card_title('📝 Export Word (ฉบับเต็ม)')
 
+        # ── Report Settings ───────────────────────────────
+        st.markdown(
+            '<div style="font-size:12px;font-weight:600;color:#BF360C;margin-bottom:6px">'
+            '📌 หัวข้อและรูป</div>', unsafe_allow_html=True)
+        rs1, rs2, rs3 = st.columns(3)
+        with rs1:
+            word_sec_num = st.text_input('เลขหัวข้อ', value='4.4',
+                                          key='word_sec_num')
+        with rs2:
+            word_fig_num = st.text_input('เลขรูป', value='4-8',
+                                          key='word_fig_num')
+        with rs3:
+            word_sec_title = st.text_input('ชื่อหัวข้อ',
+                value='การออกแบบผิวทางลาดยาง (Flexible Pavement)',
+                key='word_sec_title')
+
+        st.markdown(
+            '<div style="font-size:12px;font-weight:600;color:#BF360C;'
+            'margin-top:6px;margin-bottom:6px">📋 เลขตาราง</div>',
+            unsafe_allow_html=True)
+        rt1, rt2, rt3 = st.columns(3)
+        with rt1:
+            word_tbl_param = st.text_input('ตารางพารามิเตอร์', value='4-8',
+                                            key='word_tbl_param')
+        with rt2:
+            word_tbl_mat   = st.text_input('ตารางวัสดุ', value='4-9',
+                                            key='word_tbl_mat')
+        with rt3:
+            word_tbl_sn    = st.text_input('ตารางสรุป SN', value='4-10',
+                                            key='word_tbl_sn')
+
+        st.markdown(
+            '<div style="font-size:12px;font-weight:600;color:#BF360C;'
+            'margin-top:6px;margin-bottom:6px">💬 คำบรรยาย</div>',
+            unsafe_allow_html=True)
+        rc1, rc2 = st.columns(2)
+        with rc1:
+            word_cap_param = st.text_input('คำบรรยายตารางพารามิเตอร์',
+                value='ค่าพารามิเตอร์ที่ใช้ในการออกแบบผิวทางยืดหยุ่น',
+                key='word_cap_param')
+            word_cap_sn = st.text_input('คำบรรยายตารางสรุป SN',
+                value='สรุปผลการคำนวณ Structural Number ของโครงสร้างชั้นทาง',
+                key='word_cap_sn')
+        with rc2:
+            word_cap_mat = st.text_input('คำบรรยายตารางวัสดุ',
+                value='ค่าสัมประสิทธิ์และค่าโมดูลัสของวัสดุโครงสร้างชั้นทาง',
+                key='word_cap_mat')
+            word_cap_fig = st.text_input('คำบรรยายรูป',
+                value='รูปตัดโครงสร้างชั้นทางที่ออกแบบ',
+                key='word_cap_fig')
+
+        st.markdown(
+            '<div style="font-size:12px;font-weight:600;color:#BF360C;'
+            'margin-top:6px;margin-bottom:6px">🏗️ ข้อมูลถนน</div>',
+            unsafe_allow_html=True)
+        rl1, rl2 = st.columns(2)
+        with rl1:
+            word_lanes = st.select_slider(
+                'จำนวนเลน (ช่องจราจร)',
+                options=[4, 6, 8],
+                value=4, key='word_lanes')
+        with rl2:
+            st.markdown(
+                '<div style="background:#E3F2FD;border-radius:7px;padding:8px;'
+                'text-align:center;margin-top:4px">'
+                '<div style="font-size:10px;color:#78909C">ทิศทาง (fixed)</div>'
+                '<div style="font-family:IBM Plex Mono,monospace;font-size:14px;'
+                'font-weight:600;color:#1565C0">2 ทิศทาง (ไป-กลับ)</div>'
+                '</div>', unsafe_allow_html=True)
+
+        st.markdown('---')
+
         if st.button('🔄 สร้าง Word Report', type='primary',
                      use_container_width=True):
             with st.spinner('กำลังสร้าง Word...'):
                 try:
-                    W18_w    = float(st.session_state.get('flex_w18', 0))
-                    R_w      = int(st.session_state.get('flex_reliability', 90))
-                    So_w     = float(st.session_state.get('flex_so', 0.45))
-                    p0_w     = float(st.session_state.get('flex_p0', 4.2))
-                    pt_w     = float(st.session_state.get('flex_pt', 2.5))
-                    cbr_w    = float(st.session_state.get('flex_cbr', 4.0))
-                    mr_w     = float(st.session_state.get('flex_subgrade_mr',
-                                     mr_from_cbr(cbr_w)))
-                    Zr_w     = get_zr(R_w)
-                    sn_sel   = st.session_state.get('flex_w18_sn_sel', '')
+                    W18_w     = float(st.session_state.get('flex_w18', 0))
+                    R_w       = int(st.session_state.get('flex_reliability', 90))
+                    So_w      = float(st.session_state.get('flex_so', 0.45))
+                    p0_w      = float(st.session_state.get('flex_p0', 4.2))
+                    pt_w      = float(st.session_state.get('flex_pt', 2.5))
+                    cbr_w     = float(st.session_state.get('flex_cbr', 4.0))
+                    mr_w      = float(st.session_state.get('flex_subgrade_mr',
+                                      mr_from_cbr(cbr_w)))
+                    Zr_w      = get_zr(R_w)
+                    sn_sel    = st.session_state.get('flex_w18_sn_sel', '')
                     sn_used_w = 5.0
                     if 'SN' in sn_sel:
                         try:
@@ -528,7 +600,6 @@ def render_flex_tab3():
                         except Exception:
                             pass
 
-                    # สร้างรูปตัดขวาง
                     try:
                         fig_w = plot_flex_structure(
                             res['layers'],
@@ -537,20 +608,31 @@ def render_flex_tab3():
                         fig_w = None
 
                     word_buf = create_flex_word_report(
-                        project_name=proj,
-                        designer=designer,
-                        W18=W18_w,
-                        sn_used=sn_used_w,
-                        reliability=R_w,
-                        Zr=Zr_w,
-                        So=So_w,
-                        p0=p0_w,
-                        pt=pt_w,
-                        cbr=cbr_w,
-                        mr_sub=mr_w,
-                        calc_results=res,
-                        design_check=chk,
-                        fig=fig_w,
+                        project_name  = proj,
+                        designer      = designer,
+                        W18           = W18_w,
+                        sn_used       = sn_used_w,
+                        reliability   = R_w,
+                        Zr            = Zr_w,
+                        So            = So_w,
+                        p0            = p0_w,
+                        pt            = pt_w,
+                        cbr           = cbr_w,
+                        mr_sub        = mr_w,
+                        calc_results  = res,
+                        design_check  = chk,
+                        fig           = fig_w,
+                        section_num   = word_sec_num,
+                        fig_num       = word_fig_num,
+                        section_title = word_sec_title,
+                        tbl_param_num = word_tbl_param,
+                        tbl_mat_num   = word_tbl_mat,
+                        tbl_sn_num    = word_tbl_sn,
+                        tbl_param_caption = word_cap_param,
+                        tbl_mat_caption   = word_cap_mat,
+                        tbl_sn_caption    = word_cap_sn,
+                        fig_caption       = word_cap_fig,
+                        n_lanes       = int(word_lanes),
                     )
                     st.session_state['flex_word_bytes'] = word_buf.read()
                     st.success('✅ Word พร้อมดาวน์โหลด')
