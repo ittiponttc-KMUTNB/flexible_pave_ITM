@@ -1,501 +1,503 @@
 """
-flex_tab2.py — Tab 2: Design (Subgrade + Layers + Results real-time)
+flex_tab3.py — Tab 3: PDF Report (1 หน้า A4)
 Flexible Pavement Design V1 · AASHTO 1993
-Layout: ซ้าย 60% = inputs | ขวา 40% = summary + cross-section
+ใช้ reportlab สร้าง PDF รองรับภาษาไทย (Sarabun font)
 """
 import streamlit as st
+import os
 from io import BytesIO
+from datetime import datetime
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm, mm
+from reportlab.lib import colors
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+)
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
 from flex_engine import (
-    mr_from_cbr, get_zr, calc_layer_results, check_sn,
-    plot_flex_structure, fig_to_bytes,
-    MATERIALS, MATERIAL_NAMES, DRAINAGE_TABLE,
+    mr_from_cbr, get_zr, MATERIALS,
 )
 
 _AC_BD  = '#BF360C'
 _AC_BDL = '#FFAB91'
 
 # ============================================================
-# UI Helpers
+# Font Setup
 # ============================================================
-def _card_title(text, color=_AC_BD, border=_AC_BDL):
-    st.markdown(
-        f'<div style="font-size:13px;font-weight:700;color:{color};'
-        f'padding:2px 0 6px;border-bottom:2px solid {border};'
-        f'margin-bottom:10px">{text}</div>', unsafe_allow_html=True)
+_FONT_DIR = os.path.dirname(os.path.abspath(__file__))
+_FONT_REG  = os.path.join(_FONT_DIR, 'Sarabun-Regular.ttf')
+_FONT_BOLD = os.path.join(_FONT_DIR, 'Sarabun-Bold.ttf')
 
-def _hr(color='#FFCCBC'):
-    st.markdown(
-        f'<hr style="border:none;border-top:1px solid {color};margin:6px 0">',
-        unsafe_allow_html=True)
-
-def _badge(text, bg, color):
-    return (f'<span style="background:{bg};color:{color};border-radius:4px;'
-            f'padding:2px 8px;font-size:11px;font-weight:600;'
-            f'font-family:IBM Plex Mono,monospace">{text}</span>')
+def _register_fonts():
+    try:
+        if 'Sarabun' not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont('Sarabun',     _FONT_REG))
+            pdfmetrics.registerFont(TTFont('Sarabun-Bold', _FONT_BOLD))
+        return True
+    except Exception:
+        return False
 
 # ============================================================
-# Session State Init
+# Color helpers
 # ============================================================
-_DEFAULT_LAYERS = [
-    {'material': 'ผิวทางลาดยาง AC',
-     'thickness_cm': 15.0, 'layer_coeff': 0.40,
-     'drainage_coeff': 1.0, 'override_ai': False,
-     'ac_sub': False, 'wearing_cm': 5.0, 'binder_cm': 5.0, 'base_cm': 5.0},
-    {'material': 'พื้นทางหินคลุกปรับปรุงคุณภาพด้วยปูนซีเมนต์ (Cement Treated Base)',
-     'thickness_cm': 15.0, 'layer_coeff': 0.18,
-     'drainage_coeff': 1.0, 'override_ai': False,
-     'ac_sub': False, 'wearing_cm': 0.0, 'binder_cm': 0.0, 'base_cm': 0.0},
-    {'material': 'รองพื้นทางวัสดุมวลรวม CBR 25%',
-     'thickness_cm': 15.0, 'layer_coeff': 0.10,
-     'drainage_coeff': 1.0, 'override_ai': False,
-     'ac_sub': False, 'wearing_cm': 0.0, 'binder_cm': 0.0, 'base_cm': 0.0},
-    {'material': 'วัสดุคัดเลือก ก',
-     'thickness_cm': 30.0, 'layer_coeff': 0.08,
-     'drainage_coeff': 1.0, 'override_ai': False,
-     'ac_sub': False, 'wearing_cm': 0.0, 'binder_cm': 0.0, 'base_cm': 0.0},
+_RED    = colors.HexColor('#BF360C')
+_DKRED  = colors.HexColor('#7B1D00')
+_GREEN  = colors.HexColor('#1B5E20')
+_LTGRN  = colors.HexColor('#E8F5E9')
+_LTRED  = colors.HexColor('#FFEBEE')
+_LTBLU  = colors.HexColor('#E3F2FD')
+_LTYLW  = colors.HexColor('#FFF8E1')
+_GREY   = colors.HexColor('#F5F5F5')
+_MDGREY = colors.HexColor('#78909C')
+_BLACK  = colors.black
+_WHITE  = colors.white
+
+# ============================================================
+# Mr Reference Table (fixed — วัสดุที่ต้องการแสดง)
+# ============================================================
+_MR_REF = [
+    ('ผิวทางลาดยาง PMA',      536500, 3700,  0.400),
+    ('ผิวทางลาดยาง AC',       362500, 2500,  0.400),
+    ('หินคลุกปรับปรุงคุณภาพด้วยปูนซีเมนต์ (CTB)', 174000, 1200, 0.180),
+    ('หินคลุกผสมซีเมนต์ UCS 24.5 ksc', 123250, 850, 0.150),
+    ('หินคลุก CBR 80%',        50750,  350,   0.130),
+    ('รองพื้นทางวัสดุมวลรวม CBR 25%',  21750, 150, 0.100),
+    ('วัสดุคัดเลือก ก',        14504,  100,   0.080),
 ]
 
-def _init_ss():
-    if 'flex_layers' not in st.session_state:
-        import copy
-        st.session_state['flex_layers'] = copy.deepcopy(_DEFAULT_LAYERS)
-    if 'flex_cbr' not in st.session_state:
-        st.session_state['flex_cbr'] = 4.0
-    if 'flex_subgrade_mr' not in st.session_state:
-        st.session_state['flex_subgrade_mr'] = mr_from_cbr(4.0)
-
-def _layer_base(mat):
-    return {
-        'material': mat,
-        'thickness_cm': 15.0,
-        'layer_coeff': MATERIALS[mat]['layer_coeff'],
-        'drainage_coeff': 1.0,
-        'override_ai': False,
-        'ac_sub': False,
-        'wearing_cm': 5.0, 'binder_cm': 5.0, 'base_cm': 5.0,
-    }
-
 # ============================================================
-# Drainage helper
+# PDF Generator
 # ============================================================
-def _get_mi(quality, saturation):
-    return DRAINAGE_TABLE.get(quality, {}).get('values', {}).get(saturation, 1.0)
+def generate_pdf(
+    project_name: str,
+    designer: str,
+    W18: float,
+    sn_used: float,
+    reliability: int,
+    So: float,
+    p0: float,
+    pt: float,
+    cbr: float,
+    calc_results: dict,
+    design_check: dict,
+) -> bytes:
 
-# ============================================================
-# Left panel — Layer Table
-# ============================================================
-def _render_layers():
-    import copy
+    has_font = _register_fonts()
+    fn       = 'Sarabun'      if has_font else 'Helvetica'
+    fn_bold  = 'Sarabun-Bold' if has_font else 'Helvetica-Bold'
 
-    # ── Slider จำนวนชั้น ──────────────────────────────────
-    n_target = st.slider(
-        'จำนวนชั้นทาง', min_value=1, max_value=5,
-        value=len(st.session_state['flex_layers']),
-        key='flex_n_layers',
-        help='เลื่อนเพื่อเพิ่ม/ลดจำนวนชั้น')
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=1.8*cm, rightMargin=1.8*cm,
+        topMargin=1.5*cm,  bottomMargin=1.5*cm,
+    )
+    W, H = A4
 
-    layers = st.session_state['flex_layers']
+    # ── Styles ──────────────────────────────────────────────
+    def S(name, font=fn, size=9, leading=12, color=_BLACK,
+          align='LEFT', spaceBefore=0, spaceAfter=2, bold=False):
+        return ParagraphStyle(
+            name, fontName=fn_bold if bold else font,
+            fontSize=size, leading=leading,
+            textColor=color, alignment={'LEFT':0,'CENTER':1,'RIGHT':2}[align],
+            spaceBefore=spaceBefore, spaceAfter=spaceAfter)
 
-    # ปรับ list ให้ตรงกับ slider
-    while len(layers) < n_target:
-        defaults = [
-            'ผิวทางลาดยาง AC',
-            'พื้นทางหินคลุกปรับปรุงคุณภาพด้วยปูนซีเมนต์ (Cement Treated Base)',
-            'รองพื้นทางวัสดุมวลรวม CBR 25%',
-            'วัสดุคัดเลือก ก',
-            'รองพื้นทางวัสดุมวลรวม CBR 25%',
-        ]
-        mat = defaults[len(layers)] if len(layers) < len(defaults) else 'รองพื้นทางวัสดุมวลรวม CBR 25%'
-        layers.append(_layer_base(mat))
-    while len(layers) > n_target:
-        layers.pop()
+    s_title   = S('title',   size=14, leading=18, bold=True,  color=_RED,   align='LEFT')
+    s_sub     = S('sub',     size=8,  leading=11, color=_MDGREY)
+    s_proj    = S('proj',    size=9,  leading=12, bold=True)
+    s_meta    = S('meta',    size=8,  leading=11, color=_MDGREY, align='RIGHT')
+    s_sec     = S('sec',     size=8,  leading=11, bold=True, color=_MDGREY,
+                  spaceBefore=6, spaceAfter=2)
+    s_cell    = S('cell',    size=8,  leading=11)
+    s_cellb   = S('cellb',   size=8,  leading=11, bold=True)
+    s_cellr   = S('cellr',   size=8,  leading=11, align='RIGHT')
+    s_cellbr  = S('cellbr',  size=8,  leading=11, bold=True,  align='RIGHT')
+    s_cellc   = S('cellc',   size=8,  leading=11, align='CENTER')
+    s_pass    = S('pass',    size=9,  leading=13, bold=True, color=_GREEN)
+    s_fail    = S('fail',    size=9,  leading=13, bold=True, color=colors.HexColor('#C62828'))
+    s_ratio   = S('ratio',   size=13, leading=16, bold=True, color=_GREEN)
+    s_footer  = S('footer',  size=7,  leading=10, color=_MDGREY)
+    s_footerr = S('footerr', size=7,  leading=10, color=_MDGREY, align='RIGHT')
 
-    st.session_state['flex_layers'] = layers
-
-    # ── Column header ─────────────────────────────────────
-    st.markdown(
-        '<div style="display:grid;grid-template-columns:0.35fr 3.8fr 1.0fr 1.1fr 1.1fr 1.2fr;'
-        'gap:8px;padding:4px 8px 4px 8px;background:#F5F5F5;border-radius:6px;'
-        'margin-bottom:4px;font-size:11px;font-weight:600;color:#78909C">'
-        '<div></div>'
-        '<div>วัสดุ</div>'
-        '<div style="text-align:center">D (cm)</div>'
-        '<div style="text-align:center">aᵢ</div>'
-        '<div style="text-align:center">mᵢ</div>'
-        '<div style="text-align:center"></div>'
-        '</div>',
-        unsafe_allow_html=True)
-
-    # ── Layer cards ────────────────────────────────────────
-    for i, L in enumerate(layers):
-        mat      = L['material']
-        mat_data = MATERIALS.get(mat, {})
-        ltype    = mat_data.get('layer_type', 'base')
-        is_ac    = ltype == 'surface'
-        ai_def   = mat_data.get('layer_coeff', 0.10)
-
-        with st.container(border=True):
-            # ── single row: เลขชั้น | วัสดุ | หนา | a_i | m_i | [AC sublayer] ──
-            h1, h2, h3, h4, h5, h6 = st.columns([0.35, 3.8, 1.0, 1.1, 1.1, 1.2])
-            with h1:
-                st.markdown(
-                    f'<div style="font-size:12px;font-weight:700;color:{_AC_BD};'
-                    f'padding-top:6px;text-align:center">{i+1}</div>',
-                    unsafe_allow_html=True)
-            with h2:
-                new_mat = st.selectbox(
-                    'วัสดุ', options=MATERIAL_NAMES,
-                    index=MATERIAL_NAMES.index(mat) if mat in MATERIAL_NAMES else 0,
-                    key=f'lmat_{i}', label_visibility='collapsed')
-                if new_mat != mat:
-                    L['material']    = new_mat
-                    L['layer_coeff'] = MATERIALS[new_mat]['layer_coeff']
-                    st.rerun()
-            # placeholder สำหรับ lock badge — จะถูก fill หลัง sublayer render
-            _lock_ph = None
-            with h3:
-                if is_ac and L.get('ac_sub'):
-                    _lock_ph = st.empty()
-                else:
-                    new_t = st.number_input(
-                        'cm', min_value=1.0, max_value=200.0,
-                        value=float(L['thickness_cm']),
-                        step=1.0, format='%.0f',
-                        key=f'lt_{i}', label_visibility='collapsed')
-                    L['thickness_cm'] = new_t
-            with h4:
-                # a_i — input ตรง, default จาก database, user แก้ได้
-                new_ai = st.number_input(
-                    'a_i', min_value=0.01, max_value=0.60,
-                    value=float(L.get('layer_coeff', ai_def)),
-                    step=0.005, format='%.3f',
-                    key=f'lai_{i}', label_visibility='collapsed')
-                L['layer_coeff'] = new_ai
-            with h5:
-                # m_i — input ตรง, max ต่างกันตาม layer type
-                mi_max = 1.1 if is_ac else 1.4
-                mi_val = min(float(L.get('drainage_coeff', 1.0)), mi_max)
-                new_mi = st.number_input(
-                    f'm_i', min_value=0.40, max_value=mi_max,
-                    value=mi_val, step=0.05, format='%.2f',
-                    key=f'lmi_{i}', label_visibility='collapsed')
-                L['drainage_coeff'] = new_mi
-            with h6:
-                if is_ac:
-                    ac_sub = st.checkbox(
-                        'แบ่ง AC', value=L.get('ac_sub', False),
-                        key=f'lacsub_{i}')
-                    L['ac_sub'] = ac_sub
-
-            # ── AC sublayer inputs ────────────────────────
-            # มาตรฐาน หล.-ม. 408/2532
-            _AC_SUB_RANGE = {
-                'wearing': (4.0, 7.0),
-                'binder':  (4.0, 8.0),
-                'base':    (7.0, 10.0),
-            }
-            if is_ac and L.get('ac_sub'):
-                sc1, sc2, sc3 = st.columns(3)
-                with sc1:
-                    w = st.number_input('Wearing (cm)', 1.0, 20.0,
-                                        float(L.get('wearing_cm', 5.0)),
-                                        0.5, format='%.1f', key=f'lwear_{i}')
-                    L['wearing_cm'] = w
-                    wmin, wmax = _AC_SUB_RANGE['wearing']
-                    if not (wmin <= w <= wmax):
-                        st.markdown(
-                            f'<div style="background:#FFF8E1;border:1px solid #FFCC80;'
-                            f'border-radius:5px;padding:4px 8px;font-size:11px;color:#E65100">'
-                            f'⚠️ Wearing {w:.1f} cm เกินช่วงมาตรฐาน '
-                            f'({wmin:.0f}–{wmax:.0f} cm)</div>',
-                            unsafe_allow_html=True)
-                with sc2:
-                    b = st.number_input('Binder (cm)', 1.0, 20.0,
-                                        float(L.get('binder_cm', 5.0)),
-                                        0.5, format='%.1f', key=f'lbind_{i}')
-                    L['binder_cm'] = b
-                    bmin, bmax = _AC_SUB_RANGE['binder']
-                    if not (bmin <= b <= bmax):
-                        st.markdown(
-                            f'<div style="background:#FFF8E1;border:1px solid #FFCC80;'
-                            f'border-radius:5px;padding:4px 8px;font-size:11px;color:#E65100">'
-                            f'⚠️ Binder {b:.1f} cm เกินช่วงมาตรฐาน '
-                            f'({bmin:.0f}–{bmax:.0f} cm)</div>',
-                            unsafe_allow_html=True)
-                with sc3:
-                    base_cm = st.number_input('Base (cm)', 1.0, 20.0,
-                                              float(L.get('base_cm', 8.0)),
-                                              0.5, format='%.1f', key=f'lbase_{i}')
-                    L['base_cm'] = base_cm
-                    bcmin, bcmax = _AC_SUB_RANGE['base']
-                    if not (bcmin <= base_cm <= bcmax):
-                        st.markdown(
-                            f'<div style="background:#FFF8E1;border:1px solid #FFCC80;'
-                            f'border-radius:5px;padding:4px 8px;font-size:11px;color:#E65100">'
-                            f'⚠️ Base {base_cm:.1f} cm เกินช่วงมาตรฐาน '
-                            f'({bcmin:.0f}–{bcmax:.0f} cm)</div>',
-                            unsafe_allow_html=True)
-
-                total_ac = w + b + base_cm
-                L['thickness_cm'] = total_ac
-                # fill lock placeholder ด้วยค่า W+B+Base จริง
-                if _lock_ph is not None:
-                    _lock_ph.markdown(
-                        f'<div style="background:#F5F5F5;border:1px solid #E0E0E0;'
-                        f'border-radius:5px;padding:5px 8px;text-align:center;'
-                        f'font-family:IBM Plex Mono,monospace;font-size:13px;'
-                        f'font-weight:600;color:#757575;margin-top:2px">'
-                        f'🔒 {total_ac:.0f}</div>',
-                        unsafe_allow_html=True)
-                st.markdown(
-                    f'<div style="font-size:11px;color:#BF360C;font-family:'
-                    f'IBM Plex Mono,monospace">'
-                    f'W+B+Base = {w:.1f}+{b:.1f}+{base_cm:.1f} = {total_ac:.1f} cm'
-                    f'</div>',
-                    unsafe_allow_html=True)
-
-            # ── badge row + pass/fail per layer ───────────
-            ai   = L['layer_coeff']
-            mi   = L['drainage_coeff']
-            t    = L['thickness_cm']
-            dsn  = round(ai * (t / 2.54) * mi, 3)
-            mr_l = mat_data.get('mr_psi', 0)
-            # pass/fail คำนวณจาก session state ถ้ามีผลแล้ว
-            pf_html = ''
-            calc_res = st.session_state.get('flex_calc_results')
-            if calc_res and i < len(calc_res.get('layers', [])):
-                lr    = calc_res['layers'][i]
-                d_min = lr['min_thickness_cm']
-                # ใช้ความหนาปัจจุบันจาก layer (ไม่ใช่จาก calc_results เก่า)
-                d_cur = float(L['thickness_cm'])
-                is_ok_now = (d_min <= 0) or (d_cur >= d_min)
-                if is_ok_now:
-                    pf_html = _badge(
-                        f'✅ ผ่าน (Dmin={d_min:.1f} ซม.)' if d_min > 0 else '✅ ผ่าน',
-                        '#E8F5E9', '#1B5E20')
-                else:
-                    pf_html = _badge(
-                        f'⚠️ ต้องการ Dmin={d_min:.1f} ซม. (กรอกอยู่ {d_cur:.0f} ซม.)',
-                        '#FFF8E1', '#E65100')
-            st.markdown(
-                f'{_badge(f"a_i={ai:.3f}", "#E3F2FD", "#0D47A1")}&nbsp;'
-                f'{_badge(f"m_i={mi:.2f}", "#E8F5E9", "#1B5E20")}&nbsp;'
-                f'{_badge(f"D={t:.0f} cm", "#FFF3CD", "#E65100")}&nbsp;'
-                f'{_badge(f"ΔSN={dsn:.3f}", "#FBE9E7", "#BF360C")}&nbsp;'
-                f'{_badge(f"Mr={mr_l:,} psi", "#F3E5F5", "#4A148C")}'
-                + (f'&nbsp;&nbsp;{pf_html}' if pf_html else ''),
-                unsafe_allow_html=True)
-
-        layers[i] = L
-
-    st.session_state['flex_layers'] = layers
-
-# ============================================================
-# Right panel — calculate + summary + cross-section
-# ============================================================
-def _calc_and_render_right(layers, cbr, W18, Zr, So, delta_psi):
+    story = []
     mr_sub = mr_from_cbr(cbr)
+    Zr     = get_zr(reliability)
+    dp     = round(p0 - pt, 1)
+    date_str = datetime.now().strftime('%d/%m/%Y')
+    res    = calc_results
+    chk    = design_check
+    sn_req = res.get('total_sn_required') or 0.0
+    sn_prov = res.get('total_sn_provided', 0.0)
+    ratio  = round(sn_prov / sn_req, 3) if sn_req > 0 else 0.0
+    passed = chk.get('passed', False)
 
-    # ── คำนวณ ──────────────────────────────────────────────
-    if not layers or W18 <= 0:
-        st.info('กรอกข้อมูลครบแล้วจะแสดงผลที่นี่')
-        return
+    # ── Header ───────────────────────────────────────────────
+    hdr_data = [[
+        [Paragraph('Flexible Pavement Design Report', s_title),
+         Paragraph('AASHTO 1993 · ภาควิชาครุศาสตร์โยธา มจพ.', s_sub)],
+        [Paragraph(project_name or '—', s_proj),
+         Paragraph(f'ผู้ออกแบบ: {designer or "—"}', s_meta),
+         Paragraph(f'วันที่: {date_str}', s_meta)],
+    ]]
+    hdr_tbl = Table(hdr_data, colWidths=[10.00*cm, 7.40*cm])
+    hdr_tbl.setStyle(TableStyle([
+        ('VALIGN',     (0,0), (-1,-1), 'TOP'),
+        ('LINEBELOW',  (0,0), (-1,-1), 1.5, _RED),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+    ]))
+    story.append(hdr_tbl)
+    story.append(Spacer(1, 6))
 
-    res = calc_layer_results(W18, Zr, So, delta_psi, mr_sub, layers)
-    chk = check_sn(res['total_sn_required'], res['total_sn_provided'])
+    # ── Param + Subgrade (2 คอลัมน์) ────────────────────────
+    def kv_rows(pairs):
+        rows = []
+        for k, v in pairs:
+            rows.append([Paragraph(k, s_cell), Paragraph(str(v), s_cellbr)])
+        return rows
 
-    # ── warnings ───────────────────────────────────────────
-    for w in res['warnings']:
-        st.warning(w)
+    param_pairs = [
+        ('W\u2081\u2088 (ESALs) — SN ที่ใช้', f'{W18:,.0f}  (SN {sn_used:.1f})'),
+        ('Reliability (R)', f'{reliability}%'),
+        ('Zr', f'{Zr:.3f}'),
+        ('Overall Std Dev (S\u2080)', f'{So:.2f}'),
+        ('P\u2080 / Pt', f'{p0:.1f} / {pt:.1f}'),
+        ('ΔPSI', f'{dp:.1f}'),
+    ]
+    sub_pairs = [
+        ('CBR', f'{cbr:.1f}%'),
+        ('Mr (psi)', f'{mr_sub:,.0f}'),
+        ('Mr (MPa)', f'{mr_sub*0.006895:.1f}'),
+        ('SN_required (รวม)', f'{sn_req:.2f}'),
+        ('SN_provided (รวม)', f'{sn_prov:.2f}'),
+    ]
 
-    # ── PASS / FAIL banner ─────────────────────────────────
-    if chk['passed']:
-        st.markdown(
-            f'<div style="background:#E8F5E9;border:2px solid #2E7D32;'
-            f'border-radius:8px;padding:10px 14px;text-align:center;margin-bottom:8px">'
-            f'<div style="font-size:15px;font-weight:700;color:#2E7D32">✅ PASS</div>'
-            f'<div style="font-family:IBM Plex Mono,monospace;font-size:12px;color:#2E7D32">'
-            f'SN_provided ({res["total_sn_provided"]:.3f}) ≥ '
-            f'SN_required ({res["total_sn_required"]:.3f})</div>'
-            f'<div style="font-size:11px;color:#388E3C">margin = '
-            f'+{chk["safety_margin"]:.3f}</div>'
-            f'</div>', unsafe_allow_html=True)
-    else:
-        sn_req = res['total_sn_required'] or 0
-        st.markdown(
-            f'<div style="background:#FFEBEE;border:2px solid #C62828;'
-            f'border-radius:8px;padding:10px 14px;text-align:center;margin-bottom:8px">'
-            f'<div style="font-size:15px;font-weight:700;color:#C62828">❌ FAIL</div>'
-            f'<div style="font-family:IBM Plex Mono,monospace;font-size:12px;color:#C62828">'
-            f'SN_provided ({res["total_sn_provided"]:.3f}) &lt; '
-            f'SN_required ({sn_req:.3f})</div>'
-            f'<div style="font-size:11px;color:#C62828">ขาด = '
-            f'{abs(chk["safety_margin"]):.3f}</div>'
-            f'</div>', unsafe_allow_html=True)
+    def mini_table(pairs, bg, col_widths=None):
+        rows = kv_rows(pairs)
+        t = Table(rows, colWidths=col_widths or [4.50*cm, 3.50*cm])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), bg),
+            ('FONTNAME',   (0,0), (-1,-1), fn),
+            ('FONTSIZE',   (0,0), (-1,-1), 8),
+            ('TOPPADDING', (0,0), (-1,-1), 2),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+            ('LINEBELOW', (0,0), (-1,-2), 0.3,
+             colors.HexColor('#E0E0E0')),
+            ('ROUNDEDCORNERS', [4]),
+        ]))
+        return t
 
-    # ── SN summary table ───────────────────────────────────
-    rows_html = ''
-    for L in res['layers']:
-        ok_icon = '✅' if L['is_ok'] else '⚠️'
-        rows_html += (
-            f'<tr>'
-            f'<td style="text-align:center">{L["layer_no"]}</td>'
-            f'<td>{L["short_name"]}</td>'
-            f'<td style="text-align:right;font-family:IBM Plex Mono,monospace">'
-            f'{L["design_thickness_cm"]:.0f}</td>'
-            f'<td style="text-align:right;font-family:IBM Plex Mono,monospace;'
-            f'color:#BF360C">{L["sn_contribution"]:.3f}</td>'
-            f'<td style="text-align:right;font-family:IBM Plex Mono,monospace">'
-            f'{L["cumulative_sn"]:.3f}</td>'
-            f'<td style="text-align:center">{ok_icon}</td>'
-            f'</tr>'
-        )
-    sn_prov = res['total_sn_provided']
-    sn_req  = res['total_sn_required'] or 0
-    total_t = sum(L['design_thickness_cm'] for L in res['layers'])
+    p_tbl = mini_table(param_pairs, _LTYLW, [6.50*cm, 3.50*cm])
+    s_tbl = mini_table(sub_pairs,   _LTBLU, [4.50*cm, 2.90*cm])
+
+    def sec_label(text):
+        return Paragraph(text, s_sec)
+
+    two_col = Table(
+        [[sec_label('พารามิเตอร์การออกแบบ'), sec_label('Subgrade')],
+         [p_tbl, s_tbl]],
+        colWidths=[10.00*cm, 7.40*cm])
+    two_col.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('LEFTPADDING',  (1,0), (1,-1), 12),
+        ('RIGHTPADDING', (0,0), (0,-1), 12),
+    ]))
+    story.append(two_col)
+    story.append(Spacer(1, 8))
+
+    # ── Layer Table ──────────────────────────────────────────
+    story.append(sec_label('ชั้นทาง'))
+
+    def p(text, style=s_cell): return Paragraph(text, style)
+    def pc(text): return p(text, s_cellc)
+    def pr(text): return p(text, s_cellr)
+
+    # usable width = A4 - margins = 17.40 cm
+    _UW = 17.40*cm
+    col_w = [8.70*cm, 1.10*cm, 1.00*cm, 0.90*cm,
+             1.10*cm, 1.10*cm, 1.30*cm, 1.20*cm, 1.00*cm]
+    hdr_row = [
+        p('วัสดุ', s_cellb),
+        pc('D\n(cm)'), pc('a\u1d62'), pc('m\u1d62'),
+        pc('ΔSN'), pc('ΣSN'), pc('SN_req'),
+        pc('D_min\n(cm)'), pc('chk'),
+    ]
+    tbl_rows = [hdr_row]
+
+    # ตัดคำนำหน้าที่ยาวออก
+    def _short_mat(name):
+        for prefix in ['ผิวทางลาดยาง ', 'พื้นทาง', 'รองพื้นทาง']:
+            if name.startswith(prefix):
+                return name[len(prefix):]
+        return name
+
+    for L in res.get('layers', []):
+        mat_full = L.get('material', L.get('short_name', ''))
+        mat_disp = _short_mat(mat_full)
+        # ถ้า AC sublayer
+        ac_sub = L.get('ac_sublayers')
+        if ac_sub:
+            w  = ac_sub.get('wearing_cm', 0)
+            b  = ac_sub.get('binder_cm',  0)
+            bc = ac_sub.get('base_cm',    0)
+            mat_txt = f'{mat_disp}<br/><font size="7" color="#78909C">W {w:.0f}+B {b:.0f}+Base {bc:.0f} cm</font>'
+        else:
+            mat_txt = mat_disp
+
+        dmin = L['min_thickness_cm']
+        dmin_str = f"{dmin:.1f}" if dmin > 0 else '—'
+        ok_p = (Paragraph('<b>OK</b>', ParagraphStyle('ok', fontName=fn_bold, fontSize=7, textColor=_GREEN, alignment=1, leading=9))
+                if L['is_ok'] else
+                Paragraph('<b>NG</b>', ParagraphStyle('ng', fontName=fn_bold, fontSize=7, textColor=colors.HexColor('#C62828'), alignment=1, leading=9)))
+
+        tbl_rows.append([
+            p(mat_txt, s_cell),
+            pr(f"{L['design_thickness_cm']:.0f}"),
+            pr(f"{L['a_i']:.2f}"),
+            pr(f"{L['m_i']:.1f}"),
+            pr(f"{L['sn_contribution']:.2f}"),
+            pr(f"{L['cumulative_sn']:.2f}"),
+            pr(f"{L['sn_required_at_layer']:.2f}"),
+            pr(dmin_str),
+            ok_p,
+        ])
+
+    total_d = sum(L['design_thickness_cm'] for L in res.get('layers', []))
+    tbl_rows.append([
+        p('รวม', s_cellb),
+        pr(f'{total_d:.0f}'),
+        pr(''), pr(''),
+        pr(f'{sn_prov:.2f}'),
+        pr(''), pr(''), pr(''), pr(''),
+    ])
+
+    layer_tbl = Table(tbl_rows, colWidths=col_w, repeatRows=1)
+    n = len(tbl_rows)
+    layer_tbl.setStyle(TableStyle([
+        ('BACKGROUND',  (0,0), (-1,0), colors.HexColor('#D84315')),
+        ('TEXTCOLOR',   (0,0), (-1,0), _WHITE),
+        ('FONTNAME',    (0,0), (-1,0), fn_bold),
+        ('FONTSIZE',    (0,0), (-1,-1), 7),
+        ('TOPPADDING',  (0,0), (-1,-1), 3),
+        ('BOTTOMPADDING',(0,0),(-1,-1), 3),
+        ('LINEBELOW',   (0,1), (-1,-2), 0.3, colors.HexColor('#E0E0E0')),
+        ('BACKGROUND',  (0,n-1), (-1,n-1), _GREY),
+        ('FONTNAME',    (0,n-1), (-1,n-1), fn_bold),
+        ('VALIGN',      (0,0), (-1,-1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0,1), (-1,n-2),
+         [_WHITE, colors.HexColor('#FAFAFA')]),
+    ]))
+    story.append(layer_tbl)
+    story.append(Spacer(1, 8))
+
+    # ── Verdict ──────────────────────────────────────────────
+    v_bg   = _LTGRN if passed else _LTRED
+    v_bc   = colors.HexColor('#2E7D32') if passed else colors.HexColor('#C62828')
+    v_text = 'PASS — โครงสร้างผ่านการออกแบบ' if passed else 'FAIL — โครงสร้างไม่ผ่านการออกแบบ'
+    v_sty  = s_pass if passed else s_fail
+    r_sty  = ParagraphStyle('ratio2', fontName=fn_bold, fontSize=13,
+                             textColor=v_bc, alignment=2, leading=16)
+
+    verdict_data = [[
+        [p(v_text, v_sty),
+         p(f'SN_provided = {sn_prov:.2f}  ≥  SN_required = {sn_req:.2f}'
+           if passed else
+           f'SN_provided = {sn_prov:.2f}  <  SN_required = {sn_req:.2f}',
+           s_cell)],
+        p(f'Ratio = {ratio:.3f}', r_sty),
+    ]]
+    verdict_tbl = Table(verdict_data, colWidths=[13.10*cm, 4.30*cm])
+    verdict_tbl.setStyle(TableStyle([
+        ('BACKGROUND',    (0,0), (-1,-1), v_bg),
+        ('BOX',           (0,0), (-1,-1), 1.2, v_bc),
+        ('TOPPADDING',    (0,0), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('LEFTPADDING',   (0,0), (-1,-1), 8),
+        ('RIGHTPADDING',  (0,0), (-1,-1), 8),
+        ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
+        ('ROUNDEDCORNERS', [4]),
+    ]))
+    story.append(verdict_tbl)
+    story.append(Spacer(1, 10))
+
+    # ── Mr Reference Table ───────────────────────────────────
+    story.append(sec_label('ตารางค่า Mr อ้างอิง (มาตรฐานกรมทางหลวง)'))
+
+    ref_hdr = [p('วัสดุ', s_cellb),
+               pc('Mr (psi)'), pc('Mr (MPa)'), pc('aᵢ')]
+    ref_rows = [ref_hdr]
+    for mat_name, mr_psi, mr_mpa, ai in _MR_REF:
+        ref_rows.append([
+            p(mat_name, s_cell),
+            pr(f'{mr_psi:,}'),
+            pr(f'{mr_mpa:,}'),
+            pr(f'{ai:.3f}'),
+        ])
+    # เพิ่ม subgrade
+    ref_rows.append([
+        p(f'Subgrade (CBR={cbr:.1f}%)', s_cell),
+        pr(f'{mr_sub:,}'),
+        pr(f'{mr_sub*0.006895:.1f}'),
+        pr('—'),
+    ])
+
+    ref_tbl = Table(ref_rows,
+                    colWidths=[10.40*cm, 2.50*cm, 2.50*cm, 2.00*cm],
+                    repeatRows=1)
+    nr = len(ref_rows)
+    ref_tbl.setStyle(TableStyle([
+        ('BACKGROUND',  (0,0), (-1,0), colors.HexColor('#78909C')),
+        ('TEXTCOLOR',   (0,0), (-1,0), _WHITE),
+        ('FONTNAME',    (0,0), (-1,-1), fn),
+        ('FONTNAME',    (0,0), (-1,0),  fn_bold),
+        ('FONTSIZE',    (0,0), (-1,-1), 7),
+        ('TOPPADDING',  (0,0), (-1,-1), 3),
+        ('BOTTOMPADDING',(0,0),(-1,-1), 3),
+        ('LINEBELOW',   (0,1), (-1,-2), 0.3, colors.HexColor('#E0E0E0')),
+        ('BACKGROUND',  (0,nr-1),(-1,nr-1), _LTBLU),
+        ('ROWBACKGROUNDS', (0,1),(-1,nr-2),
+         [_WHITE, colors.HexColor('#FAFAFA')]),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+    ]))
+    story.append(ref_tbl)
+    story.append(Spacer(1, 8))
+
+    # ── Footer ───────────────────────────────────────────────
+    story.append(HRFlowable(width='100%', thickness=0.5,
+                             color=colors.HexColor('#E0E0E0')))
+    story.append(Spacer(1, 3))
+    ft_data = [[
+        p('รศ.ดร.อิทธิพล มีผล · ภาควิชาครุศาสตร์โยธา · มจพ.', s_footer),
+        p('Flexible Pavement Design V1 · AASHTO 1993 · หน้า 1/1', s_footerr),
+    ]]
+    ft_tbl = Table(ft_data, colWidths=[10.00*cm, 7.40*cm])
+    ft_tbl.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+    ]))
+    story.append(ft_tbl)
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+# ============================================================
+# UI Helpers
+# ============================================================
+def _card_title(text):
     st.markdown(
-        f'<table style="width:100%;border-collapse:collapse;font-size:11px">'
-        f'<thead><tr style="background:#BF360C;color:white">'
-        f'<th style="padding:4px 6px">#</th>'
-        f'<th style="padding:4px 6px;text-align:left">วัสดุ</th>'
-        f'<th style="padding:4px 6px;text-align:right">cm</th>'
-        f'<th style="padding:4px 6px;text-align:right">ΔSN</th>'
-        f'<th style="padding:4px 6px;text-align:right">ΣSN</th>'
-        f'<th style="padding:4px 6px">ok?</th>'
-        f'</tr></thead>'
-        f'<tbody style="background:white">{rows_html}</tbody>'
-        f'<tfoot><tr style="background:#FFF3CD;font-weight:700">'
-        f'<td colspan="2" style="padding:4px 6px">รวม</td>'
-        f'<td style="padding:4px 6px;text-align:right;font-family:IBM Plex Mono,monospace">'
-        f'{total_t:.0f} cm</td>'
-        f'<td colspan="2" style="padding:4px 6px;text-align:right;'
-        f'font-family:IBM Plex Mono,monospace;color:#BF360C">'
-        f'SN = {sn_prov:.3f} / {sn_req:.3f}</td>'
-        f'<td></td></tr></tfoot>'
-        f'</table>',
+        f'<div style="font-size:13px;font-weight:700;color:#BF360C;'
+        f'padding:2px 0 6px;border-bottom:2px solid #FFAB91;'
+        f'margin-bottom:10px">{text}</div>',
         unsafe_allow_html=True)
 
-    _hr()
-
-    # ── cross-section ──────────────────────────────────────
-    try:
-        fig = plot_flex_structure(
-            res['layers'], subgrade_cbr=None,
-            title=st.session_state.get('flex_project_name', '') or 'Flexible Pavement')
-        buf = fig_to_bytes(fig)
-        import matplotlib.pyplot as plt
-        plt.close(fig)
-        st.image(buf, use_container_width=True)
-    except Exception as e:
-        st.caption(f'ไม่สามารถแสดงรูปตัดขวาง: {e}')
-
-    # ── บันทึกผลลัพธ์ → Tab 3 (Report) ──────────────────
-    st.session_state['flex_calc_results'] = res
-    st.session_state['flex_design_check'] = chk
 
 # ============================================================
-# Main
+# Main Render
 # ============================================================
-def render_flex_tab2():
-    _init_ss()
+def render_flex_tab3():
 
-    # ── พารามิเตอร์จาก Tab 1 ──────────────────────────────
-    R         = int(st.session_state.get('flex_reliability', 90))
-    So        = float(st.session_state.get('flex_so', 0.45))
-    p0        = float(st.session_state.get('flex_p0', 4.2))
-    pt        = float(st.session_state.get('flex_pt', 2.5))
-    Zr        = get_zr(R)
-    delta_psi = p0 - pt
+    res = st.session_state.get('flex_calc_results')
+    chk = st.session_state.get('flex_design_check')
 
-    # ── W18 selector ──────────────────────────────────────
-    ed       = st.session_state.get('flex_esal_data')
-    sn_tbl   = ed.get('sn_table', []) if ed else []
-    w18_mode = st.session_state.get('flex_w18_mode', 'manual')
-
-    if sn_tbl and w18_mode == 'json':
-        # JSON mode: มี sn_table → ให้เลือก SN
-        options     = [f"SN {r['SN']:.1f}  →  W₁₈ = {r['W18']:,.0f}" for r in sn_tbl]
-        sel_key     = 'flex_w18_sn_sel'
-        saved_sel   = st.session_state.get(sel_key, options[0])
-        sel_idx     = options.index(saved_sel) if saved_sel in options else 0
-        with st.container(border=True):
-            st.markdown(
-                '<div style="font-size:12px;font-weight:700;color:#BF360C;'
-                'margin-bottom:6px">📌 เลือก W₁₈ จาก SN (Tab 1)</div>',
-                unsafe_allow_html=True)
-            chosen = st.radio(
-                'เลือก W₁₈',
-                options=options,
-                index=sel_idx,
-                key=sel_key,
-                horizontal=True,
-                label_visibility='collapsed')
-            chosen_idx = options.index(chosen)
-            W18 = float(sn_tbl[chosen_idx]['W18'])
-            st.session_state['flex_w18'] = W18
-    else:
-        W18 = float(st.session_state.get('flex_w18', 0))
-
-    if W18 <= 0:
-        st.warning('⚠️ กรุณากรอก W₁₈ ใน Tab 1 ก่อน')
+    if not res or not chk:
+        st.info('⚠️ กรุณาออกแบบชั้นทางใน Tab 2 ก่อน — ผลการคำนวณจะแสดงที่นี่')
         return
 
-    # ── status bar ─────────────────────────────────────────
-    st.markdown(
-        f'<div style="background:#F3E5F5;border:1px solid #CE93D8;'
-        f'border-radius:7px;padding:6px 14px;font-size:12px;margin-bottom:10px">'
-        f'W₁₈ = <b style="font-family:IBM Plex Mono,monospace;color:#6A1B9A">'
-        f'{W18:,.0f}</b>'
-        f'&nbsp;|&nbsp; R = <b style="color:#6A1B9A">{R}%</b>'
-        f'&nbsp;|&nbsp; Zr = <b style="font-family:IBM Plex Mono,monospace;'
-        f'color:#6A1B9A">{Zr:.3f}</b>'
-        f'&nbsp;|&nbsp; ΔPSI = <b style="font-family:IBM Plex Mono,monospace;'
-        f'color:#6A1B9A">{delta_psi:.1f}</b>'
-        f'&nbsp;|&nbsp; S₀ = <b style="font-family:IBM Plex Mono,monospace;'
-        f'color:#6A1B9A">{So:.2f}</b>'
-        f'</div>', unsafe_allow_html=True)
+    # ── Project info ─────────────────────────────────────────
+    with st.container(border=True):
+        _card_title('📋 ข้อมูลสำหรับรายงาน')
+        c1, c2 = st.columns(2)
+        with c1:
+            proj = st.text_input(
+                'ชื่อโครงการ',
+                value=st.session_state.get('flex_project_name', ''),
+                key='flex_report_project')
+        with c2:
+            designer = st.text_input(
+                'ผู้ออกแบบ',
+                value=st.session_state.get('flex_designer', ''),
+                key='flex_designer',
+                placeholder='เช่น รศ.ดร.อิทธิพล มีผล')
 
-    # ── 2 columns layout ───────────────────────────────────
-    left, right = st.columns([3, 2])
+    # ── Summary ──────────────────────────────────────────────
+    with st.container(border=True):
+        _card_title('📊 สรุปผลการออกแบบ')
+        sn_req  = res.get('total_sn_required') or 0
+        sn_prov = res.get('total_sn_provided', 0)
+        ratio   = round(sn_prov / sn_req, 3) if sn_req > 0 else 0
+        passed  = chk.get('passed', False)
 
-    with left:
-        # Subgrade
-        with st.container(border=True):
-            _card_title('🌍 Subgrade')
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                cbr = st.number_input(
-                    'CBR (%)', 1.0, 30.0,
-                    float(st.session_state.get('flex_cbr', 4.0)),
-                    0.5, format='%.1f', key='flex_cbr')
-            with c2:
-                mr = mr_from_cbr(cbr)
+        c1, c2, c3, c4 = st.columns(4)
+        def _mbox(col, lbl, val, bg, vc):
+            with col:
                 st.markdown(
-                    f'<div style="background:#FBE9E7;border-radius:7px;'
-                    f'padding:7px;text-align:center;margin-top:2px">'
-                    f'<div style="font-size:10px;color:#78909C">Mr (psi)</div>'
-                    f'<div style="font-family:IBM Plex Mono,monospace;font-size:18px;'
-                    f'font-weight:700;color:{_AC_BD}">{mr:,.0f}</div></div>',
-                    unsafe_allow_html=True)
-            with c3:
-                st.markdown(
-                    f'<div style="background:#E3F2FD;border-radius:7px;'
-                    f'padding:7px;text-align:center;margin-top:2px">'
-                    f'<div style="font-size:10px;color:#78909C">Mr (MPa)</div>'
-                    f'<div style="font-family:IBM Plex Mono,monospace;font-size:18px;'
-                    f'font-weight:700;color:#1565C0">{mr*0.006895:.1f}</div></div>',
-                    unsafe_allow_html=True)
-            st.session_state['flex_subgrade_mr'] = mr
+                    f'<div style="background:{bg};border-radius:7px;'
+                    f'padding:8px;text-align:center">'
+                    f'<div style="font-size:10px;color:#78909C">{lbl}</div>'
+                    f'<div style="font-family:IBM Plex Mono,monospace;'
+                    f'font-size:18px;font-weight:700;color:{vc}">{val}</div>'
+                    f'</div>', unsafe_allow_html=True)
 
-        # Layers
-        with st.container(border=True):
-            _card_title('🏗️ ชั้นทาง')
-            _render_layers()
+        _mbox(c1, 'SN_required', f'{sn_req:.3f}',  '#FBE9E7', '#BF360C')
+        _mbox(c2, 'SN_provided', f'{sn_prov:.3f}', '#E8F5E9', '#2E7D32')
+        _mbox(c3, 'Ratio',       f'{ratio:.3f}',
+              '#E8F5E9' if passed else '#FFEBEE',
+              '#2E7D32' if passed else '#C62828')
+        _mbox(c4, 'สถานะ',
+              '✅ PASS' if passed else '❌ FAIL',
+              '#E8F5E9' if passed else '#FFEBEE',
+              '#2E7D32' if passed else '#C62828')
 
-    with right:
-        with st.container(border=True):
-            _card_title('📊 ผลการออกแบบ')
-            _calc_and_render_right(
-                st.session_state['flex_layers'],
-                float(st.session_state.get('flex_cbr', 4.0)),
-                W18, Zr, So, delta_psi)
+    # ── Export ───────────────────────────────────────────────
+    with st.container(border=True):
+        _card_title('📥 Export PDF')
+
+        if st.button('🔄 สร้าง PDF', type='primary', use_container_width=True):
+            with st.spinner('กำลังสร้าง PDF...'):
+                try:
+                    W18      = float(st.session_state.get('flex_w18', 0))
+                    R        = int(st.session_state.get('flex_reliability', 90))
+                    So       = float(st.session_state.get('flex_so', 0.45))
+                    p0       = float(st.session_state.get('flex_p0', 4.2))
+                    pt       = float(st.session_state.get('flex_pt', 2.5))
+                    cbr      = float(st.session_state.get('flex_cbr', 4.0))
+                    sn_sel   = st.session_state.get('flex_w18_sn_sel', '')
+                    sn_used  = 5.0
+                    if 'SN' in sn_sel:
+                        try:
+                            sn_used = float(sn_sel.split('SN')[1].split()[0])
+                        except Exception:
+                            pass
+
+                    pdf_bytes = generate_pdf(
+                        project_name  = proj,
+                        designer      = designer,
+                        W18           = W18,
+                        sn_used       = sn_used,
+                        reliability   = R,
+                        So            = So,
+                        p0            = p0,
+                        pt            = pt,
+                        cbr           = cbr,
+                        calc_results  = res,
+                        design_check  = chk,
+                    )
+                    st.session_state['flex_pdf_bytes'] = pdf_bytes
+                    st.success('✅ PDF พร้อมดาวน์โหลด')
+                except Exception as e:
+                    st.error(f'❌ สร้าง PDF ไม่ได้: {e}')
+
+        if st.session_state.get('flex_pdf_bytes'):
+            fname = f"flex_pavement_{(proj or 'report').replace(' ','_')}.pdf"
+            st.download_button(
+                label='📥 ดาวน์โหลด PDF',
+                data=st.session_state['flex_pdf_bytes'],
+                file_name=fname,
+                mime='application/pdf',
+                use_container_width=True,
+            )
