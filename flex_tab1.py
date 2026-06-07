@@ -83,26 +83,15 @@ def _param_summary(W18, reliability, Zr, So, delta_psi, pt):
 # ============================================================
 # W18–SN Mapping Cards
 # ============================================================
-def _w18_sn_cards(rows: list, w18_design: float):
-    """
-    แสดง card ของแต่ละ SN — highlight แถวที่ W18 ≥ W18_design
-    rows: [{'SN': float, 'W18': int}, ...]
-    """
-    # หา SN_required โดยประมาณ (SN แรกที่ W18 ≥ w18_design)
-    sn_req_approx = None
-    for r in rows:
-        if r['W18'] >= w18_design:
-            sn_req_approx = r['SN']
-            break
-
+def _w18_sn_cards(rows: list):
+    """แสดง card W18 ต่อ SN — ไม่มีการเปรียบเทียบกับ W18_design"""
     st.markdown(
-        f'<div style="font-size:12px;font-weight:700;color:#BF360C;margin-bottom:8px">'
-        f'📊 ผลการคำนวณ ESAL — Flexible Pavement'
-        f'<span style="font-size:10px;font-weight:400;color:#78909C;margin-left:8px">'
-        f'(W₁₈ ที่ SN แต่ละค่า)</span></div>',
+        '<div style="font-size:12px;font-weight:700;color:#BF360C;margin-bottom:8px">'
+        '📊 ผลการคำนวณ ESAL — Flexible Pavement'
+        '<span style="font-size:10px;font-weight:400;color:#78909C;margin-left:8px">'
+        '(W₁₈ ที่ SN แต่ละค่า)</span></div>',
         unsafe_allow_html=True)
 
-    # แสดง card ทีละ 4 คอลัมน์
     cols_per_row = 4
     for batch_start in range(0, len(rows), cols_per_row):
         batch = rows[batch_start: batch_start + cols_per_row]
@@ -110,48 +99,22 @@ def _w18_sn_cards(rows: list, w18_design: float):
         for col, r in zip(cols, batch):
             sn  = r['SN']
             w18 = r['W18']
-            # สี: เขียว = W18 ≥ design, ส้ม = W18 ใกล้ (±20%), เทา = ต่ำกว่า
-            ratio = w18 / w18_design if w18_design > 0 else 1.0
-            if ratio >= 1.0:
-                bg, vc, bd = '#E8F5E9', '#2E7D32', '#A5D6A7'
-                icon = '✅'
-            elif ratio >= 0.85:
-                bg, vc, bd = '#FFF8E1', '#E65100', '#FFCC80'
-                icon = '⚠️'
-            else:
-                bg, vc, bd = '#F5F5F5', '#757575', '#E0E0E0'
-                icon = ''
-            # highlight SN_required
-            border_w = '2px' if sn == sn_req_approx else '1px'
             with col:
                 st.markdown(
-                    f'<div style="background:{bg};border:{border_w} solid {bd};'
+                    f'<div style="background:#E8F5E9;border:1px solid #A5D6A7;'
                     f'border-radius:8px;padding:10px 8px;text-align:center;margin-bottom:6px">'
                     f'<div style="font-family:IBM Plex Mono,monospace;font-size:22px;'
-                    f'font-weight:700;color:{vc}">{w18:,.0f}</div>'
+                    f'font-weight:700;color:#2E7D32">{w18:,.0f}</div>'
                     f'<div style="font-size:10px;color:#78909C;margin-top:3px">'
-                    f'ESAL — SN {sn:.1f} &nbsp;{icon}</div>'
+                    f'ESAL — SN {sn:.1f} ✅</div>'
                     f'</div>',
                     unsafe_allow_html=True)
 
-    # แถบสรุป
-    if sn_req_approx:
-        st.markdown(
-            f'<div style="background:#E8F5E9;border:1.5px solid #A5D6A7;'
-            f'border-radius:8px;padding:8px 14px;margin-top:4px;font-size:12px">'
-            f'✅ ค่า ESAL บันทึกแล้ว → ใช้ได้ใน Tab Flexible Design &nbsp;|&nbsp; '
-            f'SN โดยประมาณที่ W₁₈_design = '
-            f'<b style="font-family:IBM Plex Mono,monospace;color:#2E7D32">'
-            f'SN ≈ {sn_req_approx:.1f}</b>'
-            f'</div>',
-            unsafe_allow_html=True)
-    else:
-        st.markdown(
-            f'<div style="background:#FFF8E1;border:1.5px solid #FFCC80;'
-            f'border-radius:8px;padding:8px 14px;margin-top:4px;font-size:12px">'
-            f'⚠️ W₁₈_design ({w18_design:,.0f}) สูงกว่า W₁₈ ที่ SN_max ทั้งหมด '
-            f'— พิจารณาลด W₁₈ หรือเพิ่ม SN_max</div>',
-            unsafe_allow_html=True)
+    st.markdown(
+        '<div style="background:#E8F5E9;border:1.5px solid #A5D6A7;'
+        'border-radius:8px;padding:8px 14px;margin-top:4px;font-size:12px">'
+        '✅ ค่า ESAL บันทึกแล้ว → ใช้ได้ใน Tab Flexible Design</div>',
+        unsafe_allow_html=True)
 
 
 # ============================================================
@@ -408,9 +371,7 @@ def _show_esal_summary(ed: dict):
 
     if sn_tbl:
         _hr()
-        w18_design = float(st.session_state.get('flex_w18',
-                           sn_tbl[0]['W18'] if sn_tbl else 0))
-        _w18_sn_cards(sn_tbl, w18_design)
+        _w18_sn_cards(sn_tbl)
 
     # Truck Factors + Traffic table
     td = ed.get('traffic_data', [])
