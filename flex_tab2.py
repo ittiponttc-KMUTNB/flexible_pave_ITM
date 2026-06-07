@@ -264,17 +264,18 @@ def _render_layers():
             pf_html = ''
             calc_res = st.session_state.get('flex_calc_results')
             if calc_res and i < len(calc_res.get('layers', [])):
-                lr = calc_res['layers'][i]
+                lr    = calc_res['layers'][i]
                 d_min = lr['min_thickness_cm']
-                d_des = lr['design_thickness_cm']
-                if lr['is_ok']:
+                # ใช้ความหนาปัจจุบันจาก layer (ไม่ใช่จาก calc_results เก่า)
+                d_cur = float(L['thickness_cm'])
+                is_ok_now = (d_min <= 0) or (d_cur >= d_min)
+                if is_ok_now:
                     pf_html = _badge(
-                        f'✅ ผ่าน (Dmin={d_min:.1f} ซม.)',
+                        f'✅ ผ่าน (Dmin={d_min:.1f} ซม.)' if d_min > 0 else '✅ ผ่าน',
                         '#E8F5E9', '#1B5E20')
                 else:
-                    short = d_min - d_des
                     pf_html = _badge(
-                        f'⚠️ ต้องการ Dmin={d_min:.1f} ซม. (กรอกอยู่ {d_des:.0f} ซม.)',
+                        f'⚠️ ต้องการ Dmin={d_min:.1f} ซม. (กรอกอยู่ {d_cur:.0f} ซม.)',
                         '#FFF8E1', '#E65100')
             st.markdown(
                 f'{_badge(f"a_i={ai:.3f}", "#E3F2FD", "#0D47A1")}&nbsp;'
