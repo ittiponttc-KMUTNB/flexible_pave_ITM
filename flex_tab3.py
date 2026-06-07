@@ -250,7 +250,9 @@ def generate_pdf(
 
         dmin = L['min_thickness_cm']
         dmin_str = f"{dmin:.1f}" if dmin > 0 else '—'
-        ok_p = p('✓', s_pass) if L['is_ok'] else p('✗', s_fail)
+        ok_p = (Paragraph('<b>OK</b>', ParagraphStyle('ok', fontName=fn_bold, fontSize=7, textColor=_GREEN, alignment=1, leading=9))
+                if L['is_ok'] else
+                Paragraph('<b>NG</b>', ParagraphStyle('ng', fontName=fn_bold, fontSize=7, textColor=colors.HexColor('#C62828'), alignment=1, leading=9)))
 
         tbl_rows.append([
             p(mat_txt, s_cell),
@@ -273,8 +275,7 @@ def generate_pdf(
         pr(''), pr(''), pr(''), pr(''),
     ])
 
-    layer_tbl = Table(tbl_rows, colWidths=col_w, repeatRows=1,
-                     rowHeights=[None] + [0.55*cm]*(len(tbl_rows)-1))
+    layer_tbl = Table(tbl_rows, colWidths=col_w, repeatRows=1)
     n = len(tbl_rows)
     layer_tbl.setStyle(TableStyle([
         ('BACKGROUND',  (0,0), (-1,0), colors.HexColor('#D84315')),
