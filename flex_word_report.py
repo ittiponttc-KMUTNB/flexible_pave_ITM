@@ -505,42 +505,86 @@ def create_flex_word_report(
           space_before=4, space_after=4)
     doc.add_paragraph()
 
-    # ── รูปตัดขวาง ──────────────────────────────────────────
+    # ── ตารางสรุปโครงสร้างชั้นทาง + รูปตัดขวาง (merge ในเซลล์แรก) ──
     _caption(doc, f'รูปที่ {fig_num}  {fig_caption}')
+    _caption(doc, f'ตารางที่ {tbl_sn_num}  {tbl_sn_caption}')
+
+    # เตรียม png bytes ของรูป (ถ้ามี)
+    _fig_buf = None
     if fig is not None:
         try:
             import matplotlib.pyplot as plt
-            buf = BytesIO()
-            fig.savefig(buf, format='png', dpi=150,
+            _b = BytesIO()
+            fig.savefig(_b, format='png', dpi=150,
                         bbox_inches='tight', facecolor='white')
-            buf.seek(0)
-            doc.add_picture(buf, width=Inches(5.0))
-            doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            _b.seek(0)
+            _fig_buf = _b
             plt.close(fig)
-        except Exception as e:
-            _para(doc, f'[ไม่สามารถแทรกรูปได้: {e}]')
-    doc.add_paragraph()
+        except Exception:
+            _fig_buf = None
 
-    # ── ตารางสรุปโครงสร้างชั้นทาง (Table 4 style) ──────────
-    _caption(doc, f'ตารางที่ {tbl_sn_num}  {tbl_sn_caption}')
-    t5 = doc.add_table(rows=1, cols=3)
+    # สร้างตาราง: header row + n layer rows + 1 subgrade row
+    n_data_rows = len(layers) + 1          # layers + subgrade
+    t5 = doc.add_table(rows=1 + n_data_rows, cols=3)
     t5.style = 'Table Grid'
     t5.alignment = WD_TABLE_ALIGNMENT.CENTER
-    for j, h in enumerate(['รายละเอียด','หนา (ซม.)','ชนิดวัสดุ']):
+
+    # ── Header row ──
+    for j, h in enumerate(['รายละเอียด', 'หนา (ซม.)', 'ชนิดวัสดุ']):
         _cell(t5.rows[0].cells[j], h, bold=True,
               align=WD_ALIGN_PARAGRAPH.CENTER, shade=HDR_COLOR)
-    for L in layers:
-        row = t5.add_row()
-        _cell(row.cells[0], '')
+
+    # ── Data rows (layers) ──
+    for idx, L in enumerate(layers):
+        row = t5.rows[1 + idx]
+        _cell(row.cells[0], '')           # จะ vMerge ทีหลัง
         _cell(row.cells[1], f'{L["design_thickness_cm"]:.0f}',
               align=WD_ALIGN_PARAGRAPH.CENTER)
-        _cell(row.cells[2], _short_mat(L['material']))
-    # Subgrade row
-    row = t5.add_row()
-    _cell(row.cells[0], '')
-    _cell(row.cells[1], 'Existing', align=WD_ALIGN_PARAGRAPH.CENTER)
-    _cell(row.cells[2],
-          f'Earth Embankment\nor Subgrade, CBR\u2265\n{cbr:.1f} %')
+        from flex_engine import MATERIALS as _MAT
+        _eng = _MAT.get(L['material'], {}).get('english_name', _short_mat(L['material']))
+        _cell(row.cells[2], _eng)
+
+    # ── Subgrade row ──
+    sub_row = t5.rows[1 + len(layers)]
+    _cell(sub_row.cells[0], '')           # จะ vMerge ทีหลัง
+    _cell(sub_row.cells[1], 'Existing', align=WD_ALIGN_PARAGRAPH.CENTER)
+    _cell(sub_row.cells[2],
+          f'Earth Embankment / Subgrade\nCBR\u2265{cbr:.1f} %')
+
+    # ── vMerge เซลล์แรกของแถวข้อมูลทั้งหมด (แถว 1 ถึง n_data_rows) ──
+    def _vmerge_start(cell):
+        """กำหนดให้ cell เป็นจุดเริ่ม vMerge"""
+        tc   = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        vm   = OxmlElement('w:vMerge')
+        vm.set(qn('w:val'), 'restart')
+        tcPr.append(vm)
+
+    def _vmerge_cont(cell):
+        """กำหนดให้ cell ต่อเนื่องจาก vMerge"""
+        tc   = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        vm   = OxmlElement('w:vMerge')
+        # ไม่ set val = ต่อเนื่อง
+        tcPr.append(vm)
+
+    _vmerge_start(t5.rows[1].cells[0])
+    for r_idx in range(2, 1 + n_data_rows):
+        _vmerge_cont(t5.rows[r_idx].cells[0])
+
+    # ── แทรกรูปในเซลล์แรกของแถวที่ 1 (vMerge restart) ──
+    first_cell = t5.rows[1].cells[0]
+    first_cell.text = ''
+    p_img = first_cell.paragraphs[0]
+    p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if _fig_buf is not None:
+        try:
+            r_img = p_img.add_run()
+            r_img.add_picture(_fig_buf, width=Inches(2.2))
+        except Exception as e:
+            r_img = p_img.add_run(f'[รูปไม่แสดง: {e}]')
+            _tf(r_img, FN, FS - 2)
+
     doc.add_paragraph()
 
     # ── Footer ────────────────────────────────────────────────
