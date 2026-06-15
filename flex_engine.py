@@ -568,9 +568,10 @@ def plot_flex_structure(layer_results: list, subgrade_cbr: float | None = None,
         fs_v = max(8, min(13, dh * 0.55))
         fs_l = max(7, min(11, dh * 0.45))
 
-        # ชื่อย่อ (ซ้าย)
-        sn_label = (layer.get('short_name') or
-                    MATERIALS.get(n, {}).get('short_name', n[:8]))
+        # ชื่อเต็ม english (ซ้าย)
+        sn_label = (layer.get('english_name') or
+                    MATERIALS.get(n, {}).get('english_name',
+                    layer.get('short_name', n[:8])))
         ax.text(xs_l - 0.3, yc, sn_label,
                 ha='right', va='center', fontsize=fs_l, fontweight='bold')
 
