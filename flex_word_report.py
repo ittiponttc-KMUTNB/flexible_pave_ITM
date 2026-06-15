@@ -1,708 +1,600 @@
 """
-flex_engine.py — Flexible Pavement Design Engine
-AASHTO 1993 — ไม่มี UI ทั้งหมด
-พัฒนาโดย รศ.ดร.อิทธิพล มีผล · ภาควิชาครุศาสตร์โยธา · มจพ.
+flex_word_report.py — Word Report ฉบับเต็ม สำหรับ Flexible Pavement Design
+AASHTO 1993 · ภาควิชาครุศาสตร์โยธา มจพ.
+
+รูปแบบตาม flexible_consult ตัวอย่าง:
+- Font: TH SarabunPSK 15pt body, 11pt equation (Times New Roman)
+- Page: A4, margin L=3.2 R=3.2 T=2.5 B=2.5 cm
+- Zero-Width Space (pythainlp) สำหรับ Thai line breaking
+- Heading 2 = section หลัก, Heading 3 = subsection
 """
-import math
-import numpy as np
+
 from io import BytesIO
-import matplotlib
+from datetime import datetime
+
+from docx import Document
+from docx.shared import Pt, Cm, Inches, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+
 try:
-    matplotlib.use('Agg')
-except Exception:
-    pass
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
+    from pythainlp.tokenize import word_tokenize as _wt
+    def _z(text: str) -> str:
+        if not text: return text
+        tokens = _wt(str(text), engine='newmm', keep_whitespace=True)
+        return '\u200b'.join(tokens)
+except ImportError:
+    def _z(text: str) -> str:
+        return str(text)
 
-matplotlib.rcParams['font.family']       = 'DejaVu Sans'
-matplotlib.rcParams['axes.unicode_minus'] = False
-
-# ============================================================
-# 1. Reliability / Zr Table
-# ============================================================
-ZR_TABLE = {
-    50: -0.000, 60: -0.253, 70: -0.524, 75: -0.674,
-    80: -0.841, 85: -1.037, 90: -1.282, 91: -1.340,
-    92: -1.405, 93: -1.476, 94: -1.555, 95: -1.645,
-    96: -1.751, 97: -1.881, 98: -2.054, 99: -2.327,
-}
-
-def get_zr(reliability: int) -> float:
-    return ZR_TABLE.get(int(reliability), -1.282)
-
-def mr_from_cbr(cbr: float) -> float:
-    """MR (psi) จาก CBR — กรมทางหลวง"""
-    return 1500.0 * cbr if cbr <= 10 else 1000.0 + 555.0 * cbr
+# ── Constants ──────────────────────────────────────────────
+FN    = 'TH SarabunPSK'
+FN_EQ = 'Times New Roman'
+FS    = 15   # body
+FS_H2 = 16   # heading 2
+FS_H3 = 15   # heading 3
+FS_EQ = 11   # equation
+FS_TB = 15   # table
+HDR_COLOR = 'BDD7EE'
+PASS_RGB  = RGBColor(0x00, 0x70, 0x00)
+FAIL_RGB  = RGBColor(0xC0, 0x00, 0x00)
 
 # ============================================================
-# 2. AASHTO 1993 Flexible — Core Equation
+# Helpers
 # ============================================================
-
-def _brentq(f, a, b, xtol=1e-10, maxiter=200):
-    """Brent's method root-finding (ไม่พึ่ง scipy)"""
-    fa, fb = f(a), f(b)
-    if fa * fb > 0:
-        raise ValueError("f(a) and f(b) must have different signs")
-    if abs(fa) < xtol:
-        return a
-    if abs(fb) < xtol:
-        return b
-    c, fc = a, fa
-    d = e = b - a
-    for _ in range(maxiter):
-        if fb * fc > 0:
-            c, fc = a, fa
-            d = e = b - a
-        if abs(fc) < abs(fb):
-            a, b, c = b, c, b
-            fa, fb, fc = fb, fc, fb
-        tol1 = 2.0 * 2.2e-16 * abs(b) + 0.5 * xtol
-        m = 0.5 * (c - b)
-        if abs(m) <= tol1 or fb == 0.0:
-            return b
-        if abs(e) >= tol1 and abs(fa) > abs(fb):
-            s = fb / fa
-            if a == c:
-                p = 2.0 * m * s
-                q = 1.0 - s
-            else:
-                q = fa / fc
-                r = fb / fc
-                p = s * (2.0 * m * q * (q - r) - (b - a) * (r - 1.0))
-                q = (q - 1.0) * (r - 1.0) * (s - 1.0)
-            if p > 0:
-                q = -q
-            else:
-                p = -p
-            if 2.0 * p < min(3.0 * m * q - abs(tol1 * q), abs(e * q)):
-                e, d = d, p / q
-            else:
-                d = m
-                e = m
-        else:
-            d = m
-            e = m
-        a, fa = b, fb
-        b += d if abs(d) > tol1 else (tol1 if m > 0 else -tol1)
-        fb = f(b)
-    return b
-
-
-def aashto_flex_residual(SN: float, W18: float, Zr: float, So: float,
-                          delta_psi: float, Mr: float) -> float:
-    """
-    AASHTO 1993 Flexible Design Equation (residual form = 0)
-    log(W18) = ZR*S0 + 9.36*log(SN+1) - 0.20
-             + log(ΔPSI/(4.2-1.5)) / (0.40 + 1094/(SN+1)^5.19)
-             + 2.32*log(MR) - 8.07
-    """
-    term1 = Zr * So
-    term2 = 9.36 * math.log10(SN + 1) - 0.20
-    num   = math.log10(delta_psi / (4.2 - 1.5))
-    den   = 0.4 + 1094.0 / ((SN + 1) ** 5.19)
-    term3 = num / den
-    term4 = 2.32 * math.log10(Mr) - 8.07
-    return (term1 + term2 + term3 + term4) - math.log10(W18)
-
-
-def calc_sn_required(W18: float, Zr: float, So: float,
-                     delta_psi: float, Mr: float) -> float | None:
-    """คำนวณ SN ที่ต้องการ จาก W18, Zr, So, ΔPSI, Mr"""
-    def f(SN):
-        return aashto_flex_residual(SN, W18, Zr, So, delta_psi, Mr)
+def _tf(run, fn=FN, size=FS, bold=False, italic=False, color=None):
+    run.font.name = fn
+    run.font.size = Pt(size)
+    run.bold   = bold
+    run.italic = italic
     try:
-        return round(_brentq(f, 0.01, 25.0, xtol=1e-8), 4)
-    except (ValueError, RuntimeError):
-        return None
+        run._element.rPr.rFonts.set(
+            '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}cs', fn)
+    except Exception:
+        pass
+    if color:
+        run.font.color.rgb = color
 
 
-def calc_w18_supported(SN: float, Zr: float, So: float,
-                       delta_psi: float, Mr: float) -> float:
-    """คำนวณ W18 ที่ SN ที่กำหนดรองรับได้"""
-    term1 = Zr * So
-    term2 = 9.36 * math.log10(SN + 1) - 0.20
-    num   = math.log10(delta_psi / (4.2 - 1.5))
-    den   = 0.4 + 1094.0 / ((SN + 1) ** 5.19)
-    term3 = num / den
-    term4 = 2.32 * math.log10(Mr) - 8.07
-    return 10 ** (term1 + term2 + term3 + term4)
+def _para(doc, text='', fn=FN, size=FS, bold=False, italic=False,
+          align=WD_ALIGN_PARAGRAPH.LEFT, color=None,
+          space_before=4, space_after=4, indent_cm=0) -> object:
+    p = doc.add_paragraph()
+    p.alignment = align
+    pf = p.paragraph_format
+    pf.space_before = Pt(space_before)
+    pf.space_after  = Pt(space_after)
+    if indent_cm:
+        pf.first_line_indent = Cm(indent_cm)
+    if text:
+        r = p.add_run(_z(str(text)))
+        _tf(r, fn, size, bold, italic, color)
+    return p
+
+
+def _mixed_para(doc, runs_spec, align=WD_ALIGN_PARAGRAPH.LEFT,
+                space_before=6, space_after=4, indent_cm=1.25):
+    """
+    runs_spec: list of (text, bold) tuples
+    """
+    p = doc.add_paragraph()
+    p.alignment = align
+    pf = p.paragraph_format
+    pf.space_before = Pt(space_before)
+    pf.space_after  = Pt(space_after)
+    if indent_cm:
+        pf.first_line_indent = Cm(indent_cm)
+    for text, bold in runs_spec:
+        r = p.add_run(_z(str(text)))
+        _tf(r, FN, FS, bold)
+    return p
+
+
+def _eq_para(doc, text, bold=False, italic=True,
+             space_before=0, space_after=4):
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    pf = p.paragraph_format
+    pf.space_before = Pt(space_before)
+    pf.space_after  = Pt(space_after)
+    r = p.add_run(str(text))
+    _tf(r, FN_EQ, FS_EQ, bold, italic)
+    return p
+
+
+def _hdr_shade(cell, fill=HDR_COLOR):
+    shd = OxmlElement('w:shd')
+    shd.set(qn('w:val'),   'clear')
+    shd.set(qn('w:color'), 'auto')
+    shd.set(qn('w:fill'),  fill)
+    cell._tc.get_or_add_tcPr().append(shd)
+
+
+def _cell(cell, text, fn=FN, size=FS_TB, bold=False,
+          align=WD_ALIGN_PARAGRAPH.LEFT, color=None, shade=None):
+    cell.text = ''
+    p = cell.paragraphs[0]
+    p.alignment = align
+    r = p.add_run(_z(str(text)))
+    _tf(r, fn, size, bold, color=color)
+    if shade:
+        _hdr_shade(cell, shade)
+
+
+def _heading(doc, num_text, title_text, level=2):
+    """Heading ที่มีเลขหัวข้อ + ชื่อ"""
+    h = doc.add_heading('', level=level)
+    h.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    h.paragraph_format.space_before = Pt(0)
+    h.paragraph_format.space_after  = Pt(0)
+    fs_h = FS_H2 if level == 2 else FS_H3
+    r = h.add_run(f'{num_text}  {title_text}')
+    _tf(r, FN, fs_h, bold=(level==2))
+    return h
+
+
+def _caption(doc, text):
+    """คำบรรยายตาราง/รูป — bold, center"""
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    pf = p.paragraph_format
+    pf.space_before = Pt(4)
+    pf.space_after  = Pt(4)
+    r = p.add_run(_z(text))
+    _tf(r, FN, FS, bold=True)
+    return p
+
+
+def _short_mat(name: str) -> str:
+    for prefix in ['ผิวทางลาดยาง ', 'พื้นทาง', 'รองพื้นทาง']:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
 
 # ============================================================
-# 3. Multilayer SN Calculation
+# Main Generator
 # ============================================================
+def create_flex_word_report(
+    project_name: str,
+    designer: str,
+    W18: float,
+    sn_used: float,
+    reliability: int,
+    Zr: float,
+    So: float,
+    p0: float,
+    pt: float,
+    cbr: float,
+    mr_sub: float,
+    calc_results: dict,
+    design_check: dict,
+    fig=None,
+    # Report settings
+    section_num: str = '4.4',
+    fig_num: str = '4-8',
+    section_title: str = 'การออกแบบผิวทางลาดยาง (Flexible Pavement)',
+    tbl_param_num: str = '4-8',
+    tbl_mat_num: str = '4-9',
+    tbl_sn_num: str = '4-10',
+    tbl_param_caption: str = 'ค่าพารามิเตอร์ที่ใช้ในการออกแบบผิวทางยืดหยุ่น',
+    tbl_mat_caption: str = 'ค่าสัมประสิทธิ์และค่าโมดูลัสของวัสดุโครงสร้างชั้นทาง',
+    tbl_sn_caption: str = 'สรุปผลการคำนวณ Structural Number ของโครงสร้างชั้นทาง',
+    fig_caption: str = 'รูปตัดโครงสร้างชั้นทางที่ออกแบบ',
+    n_lanes: int = 4,
+) -> BytesIO:
 
-def calc_layer_results(W18: float, Zr: float, So: float,
-                       delta_psi: float, subgrade_mr: float,
-                       layers: list, ac_sublayers=None) -> dict:
-    """
-    คำนวณ SN multilayer ตาม AASHTO 1993
-    layers: list of dict มี keys: material, thickness_cm, layer_coeff, drainage_coeff
-    return: dict ผลลัพธ์ครบทุก layer
-    """
-    results = {
-        'layers': [],
-        'sn_values': [],
-        'subgrade_mr': subgrade_mr,
-        'total_sn_required': None,
-        'total_sn_provided': 0.0,
-        'warnings': [],
-    }
+    doc = Document()
 
-    active = [l for l in layers
-              if l.get('material') != 'ไม่ใช้วัสดุคัดเลือก (ใช้ดินทางทรพ)']
-    if not active:
-        results['warnings'].append('⚠️ ไม่มีชั้นทางที่ active')
-        return results
+    # ── Page A4 ──────────────────────────────────────────────
+    sec = doc.sections[0]
+    sec.page_width    = Cm(21.0)
+    sec.page_height   = Cm(29.7)
+    sec.left_margin   = Cm(3.2)
+    sec.right_margin  = Cm(3.2)
+    sec.top_margin    = Cm(2.5)
+    sec.bottom_margin = Cm(2.5)
 
-    n = len(active)
+    doc.styles['Normal'].font.name = FN
+    doc.styles['Normal'].font.size = Pt(FS)
 
-    # ตรวจ Mr ลำดับชั้น (ชั้นบนควรมี Mr สูงกว่าชั้นล่าง)
-    for i in range(n - 1):
-        mr_i   = MATERIALS[active[i]['material']]['mr_psi']
-        mr_i1  = MATERIALS[active[i + 1]['material']]['mr_psi']
-        if mr_i < mr_i1:
-            results['warnings'].append(
-                f'⚠️ ชั้น {i+1} Mr={mr_i:,} psi < ชั้น {i+2} Mr={mr_i1:,} psi '
-                f'— ปกติชั้นบนควร Mr สูงกว่า'
-            )
+    delta_psi = round(p0 - pt, 1)
+    sn_req    = calc_results.get('total_sn_required') or 0.0
+    sn_prov   = calc_results.get('total_sn_provided', 0.0)
+    passed    = design_check.get('passed', False)
+    margin    = round(sn_prov - sn_req, 3)
+    ratio     = round(sn_prov / sn_req, 3) if sn_req > 0 else 0.0
+    layers    = calc_results.get('layers', [])
+    total_d   = sum(L['design_thickness_cm'] for L in layers)
+    n_layers  = len(layers)
 
-    # คำนวณ SN_i required ที่แต่ละ interface
-    sn_values = []
-    for i in range(n):
-        mr_below = (subgrade_mr if i == n - 1
-                    else MATERIALS[active[i + 1]['material']]['mr_psi'])
-        sn_i = calc_sn_required(W18, Zr, So, delta_psi, mr_below)
-        if sn_i is None:
-            results['warnings'].append(
-                f'⚠️ คำนวณ SN ชั้น {i+1} ไม่ได้ — W18 อาจสูงเกินไป'
-            )
-        sn_values.append({'layer_index': i + 1,
-                          'mr_below': mr_below,
-                          'sn_required': sn_i})
+    # sub sections
+    s1 = f'{section_num}.1'
+    s2 = f'{section_num}.2'
+    s3 = f'{section_num}.3'
+    s4 = f'{section_num}.4'
+    s5 = f'{section_num}.5'
 
-    results['sn_values'] = sn_values
-    results['total_sn_required'] = calc_sn_required(
-        W18, Zr, So, delta_psi, subgrade_mr)
+    # ──────────────────────────────────────────────────────────
+    # Heading หลัก
+    # ──────────────────────────────────────────────────────────
+    _heading(doc, section_num, section_title, level=2)
 
-    if results['total_sn_required'] is None:
-        results['warnings'].append(
-            '⚠️ คำนวณ SN_required ไม่ได้ — ลองปรับ W18, R หรือ CBR')
+    # ── Intro paragraph (mixed bold/normal runs) ──────────────
+    result_word  = 'ผ่านเกณฑ์' if passed else 'ไม่ผ่านเกณฑ์'
+    n_lanes_half = n_lanes // 2
+    _mixed_para(doc, [
+        (f'รูปแบบของถนนลาดยางในโครงการนี้เป็นถนน ', False),
+        (f'{n_lanes}', True),
+        (' ช่องจราจร ', False),
+        (f'2 ทิศทาง (ไป-กลับ)', True),
+        (' การออกแบบโครงสร้างถนนแบบยืดหยุ่น (Flexible Pavement) ใช้วิธี AASHTO 1993 '
+         'Guide for Design of Pavement Structures โดยพิจารณาจำนวนเพลาสะสม ESALs '
+         'ความน่าเชื่อถือ และผลสัมปสิทธิ์ชั้นทาง สำหรับโครงการนี้กำหนดให้ค่า W18 = ', False),
+        (f'{W18:,.0f}', True),
+        (' 18-kip ESALs ที่ระดับความน่าเชื่อถือ (Reliability) = ', False),
+        (f'{reliability}', True),
+        (' % โดยมีดินเดิมค่า CBR = ', False),
+        (f'{cbr:.1f}', True),
+        (f' % (Mr = ', False),
+        (f'{mr_sub:,.0f}', True),
+        (f' psi) ผลการออกแบบได้โครงสร้างชั้นทาง ', False),
+        (f'{n_layers}', True),
+        (' ชั้น ที่ SN_required = ', False),
+        (f'{sn_req:.2f}', True),
+        (' และ SN_provided = ', False),
+        (f'{sn_prov:.2f}', True),
+        (' ความหนารวม ', False),
+        (f'{total_d:.0f}', True),
+        (f' ซม. การออกแบบ', False),
+        (result_word, True),
+        (f' ดังแสดงผลการวิเคราะห์ในตารางที่ ', False),
+        (tbl_param_num, True),
+        (' และตารางที่ ', False),
+        (tbl_mat_num, True),
+        (' และรูปที่ ', False),
+        (fig_num, True),
+    ], space_before=6, space_after=4, indent_cm=1.25)
 
-    # สะสม SN
-    cumulative_sn = 0.0
-    for i, layer in enumerate(active):
-        mat  = MATERIALS[layer['material']]
-        a_i  = layer.get('layer_coeff',   mat['layer_coeff'])
-        m_i  = layer.get('drainage_coeff', 1.0)
-        sn_at_layer = (sn_values[i]['sn_required']
-                       if sn_values[i]['sn_required'] is not None else 0.0)
+    # ══════════════════════════════════════════════════════════
+    # 4.4.1 วิธีการออกแบบ
+    # ══════════════════════════════════════════════════════════
+    _heading(doc, s1, 'วิธีการออกแบบ', level=3)
+    _para(doc,
+        'การออกแบบโครงสร้างถนนใช้วิธี AASHTO 1993 Guide for Design of Pavement Structures '
+        'ตามมาตรฐานกรมทางหลวง โดยใช้สมการหลักดังนี้',
+        space_before=4, space_after=4, indent_cm=1.25)
+    _eq_para(doc,
+        'log10(W18) = Zr\u00b7So + 9.36\u00b7log10(SN+1) - 0.20\n'
+        '                   + log10(\u0394PSI/2.7) / [0.4 + 1094/(SN+1)^5.19] + 2.32\u00b7log10(Mr) - 8.07',
+        space_before=0, space_after=4)
 
-        if a_i > 0 and m_i > 0:
-            remaining         = max(0.0, sn_at_layer - cumulative_sn)
-            min_thick_inch    = remaining / (a_i * m_i)
-            min_thick_cm      = min_thick_inch * 2.54
+    # ══════════════════════════════════════════════════════════
+    # 4.4.2 ข้อมูลนำเข้า
+    # ══════════════════════════════════════════════════════════
+    _heading(doc, s2, 'ข้อมูลนำเข้า (Design Inputs)', level=3)
+    _para(doc,
+        'ในการออกแบบโครงสร้างถนนยืดหยุ่น การกำหนดค่าพารามิเตอร์นำเข้า (Design Inputs) '
+        f'ถือเป็นขั้นตอนสำคัญ ซึ่งในโครงการนี้ได้กำหนดค่าพารามิเตอร์ต่างๆ '
+        f'ดังแสดงในตารางที่ {tbl_param_num}',
+        space_before=4, space_after=4, indent_cm=1.25)
+    _caption(doc, f'ตารางที่ {tbl_param_num}  {tbl_param_caption}')
+
+    param_rows = [
+        ('Design ESALs (W\u2081\u2088)',       f'{W18:,.0f}',     '18-kip ESAL'),
+        (f'Structural Number (SN = {sn_used:.1f})', f'{sn_used:.1f}', '\u2014'),
+        ('Reliability (R)',                    f'{reliability}',   '%'),
+        ('Z\u1d63',                            f'{Zr:.3f}',        '\u2014'),
+        ('S\u2080',                            f'{So:.2f}',        '\u2014'),
+        ('P\u2080',                            f'{p0:.1f}',        '\u2014'),
+        ('P\u209c',                            f'{pt:.1f}',        '\u2014'),
+        ('\u0394PSI',                          f'{delta_psi:.1f}', '\u2014'),
+        ('CBR ดินเดิม',                       f'{cbr:.1f}',       '%'),
+        ('M\u1d63',                            f'{mr_sub:,.0f}',   'psi'),
+    ]
+    cw0 = [5.08*Cm(1), 5.08*Cm(1), 5.08*Cm(1)]
+    t1 = doc.add_table(rows=1, cols=3)
+    t1.style = 'Table Grid'
+    t1.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for j, h in enumerate(['พารามิเตอร์', 'ค่า', 'หน่วย']):
+        _cell(t1.rows[0].cells[j], h, bold=True,
+              align=WD_ALIGN_PARAGRAPH.CENTER, shade=HDR_COLOR)
+    for pm, val, unit in param_rows:
+        row = t1.add_row()
+        _cell(row.cells[0], pm)
+        _cell(row.cells[1], val,  align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(row.cells[2], unit, align=WD_ALIGN_PARAGRAPH.CENTER)
+    doc.add_paragraph()
+
+    # ══════════════════════════════════════════════════════════
+    # 4.4.3 คุณสมบัติวัสดุ
+    # ══════════════════════════════════════════════════════════
+    _heading(doc, s3, 'คุณสมบัติวัสดุชั้นทาง', level=3)
+    _para(doc,
+        'วัสดุโครงสร้างชั้นทางแต่ละชนิดมีค่าสัมประสิทธิ์ชั้นทาง (Layer Coefficient) '
+        'และค่าโมดูลัสความยืดหยุ่น (Resilient Modulus) ดังแสดงในตารางที่ '
+        f'{tbl_mat_num}',
+        space_before=4, space_after=4, indent_cm=1.25)
+    _caption(doc, f'ตารางที่ {tbl_mat_num}  {tbl_mat_caption}')
+
+    t2 = doc.add_table(rows=1, cols=6)
+    t2.style = 'Table Grid'
+    t2.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for j, h in enumerate(['ชั้น','วัสดุ','a\u1d62','m\u1d62','M\u1d63 (psi)','E (MPa)']):
+        _cell(t2.rows[0].cells[j], h, bold=True,
+              align=WD_ALIGN_PARAGRAPH.CENTER, shade=HDR_COLOR)
+    for L in layers:
+        row = t2.add_row()
+        _cell(row.cells[0], str(L['layer_no']),  align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(row.cells[1], _short_mat(L['material']))
+        _cell(row.cells[2], f'{L["a_i"]:.2f}',  align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(row.cells[3], f'{L["m_i"]:.2f}',  align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(row.cells[4], f'{L["mr_psi"]:,}', align=WD_ALIGN_PARAGRAPH.RIGHT)
+        _cell(row.cells[5], f'{L["mr_mpa"]:,}', align=WD_ALIGN_PARAGRAPH.RIGHT)
+
+    # AC sublayer
+    for L in layers:
+        ac_sub = L.get('ac_sublayers') or L.get('ac_sub')
+        if ac_sub and isinstance(ac_sub, dict):
+            doc.add_paragraph()
+            _para(doc, 'รายละเอียดชั้นย่อยผิวทาง AC:', bold=True,
+                  space_before=4, space_after=2)
+            t_sub = doc.add_table(rows=1, cols=3)
+            t_sub.style = 'Table Grid'
+            for j, h in enumerate(['ชั้นย่อย','ความหนา (cm)','ความหนา (mm)']):
+                _cell(t_sub.rows[0].cells[j], h, bold=True,
+                      align=WD_ALIGN_PARAGRAPH.CENTER, shade=HDR_COLOR)
+            for label, key in [
+                ('ผิวทาง Wearing Course', 'wearing_cm'),
+                ('รองผิวทาง Binder Course', 'binder_cm'),
+                ('พื้นทาง Base Course', 'base_cm'),
+            ]:
+                t_cm = ac_sub.get(key, 0)
+                row  = t_sub.add_row()
+                _cell(row.cells[0], label)
+                _cell(row.cells[1], f'{t_cm:.1f}', align=WD_ALIGN_PARAGRAPH.CENTER)
+                _cell(row.cells[2], f'{t_cm*10:.0f}', align=WD_ALIGN_PARAGRAPH.CENTER)
+            break
+    doc.add_paragraph()
+
+    # ══════════════════════════════════════════════════════════
+    # 4.4.4 ขั้นตอนการคำนวณความหนาชั้นทาง
+    # ══════════════════════════════════════════════════════════
+    _heading(doc, s4, 'ขั้นตอนการคำนวณความหนาชั้นทาง', level=3)
+    _para(doc,
+        'การคำนวณความหนาขั้นต่ำของแต่ละชั้น ใช้หลักการว่า Structural Number (SN) '
+        'ที่จุดใดๆ ของโครงสร้างต้องมากกว่าหรือเท่ากับค่า SN ที่คำนวณได้จากสมการ AASHTO 1993',
+        space_before=4, space_after=4, indent_cm=1.25)
+
+    for L in layers:
+        ln      = L['layer_no']
+        a_i     = L['a_i']
+        m_i     = L['m_i']
+        d_in    = L['design_thickness_inch']
+        d_cm    = L['design_thickness_cm']
+        sn_at   = L['sn_required_at_layer']
+        d_min   = L['min_thickness_cm']
+        sn_cont = L['sn_contribution']
+        sn_cum  = L['cumulative_sn']
+        is_ok   = L['is_ok']
+
+        doc.add_paragraph()
+        # ชื่อชั้น
+        _para(doc, f'ชั้นที่ {ln}: {_short_mat(L["material"])}',
+              bold=True, space_before=6, space_after=4)
+        # ข้อมูลวัสดุ
+        _para(doc, 'ข้อมูลวัสดุ:', bold=True, space_before=4, space_after=2)
+        _para(doc,
+            f'\u2022 Mr = {L["mr_psi"]:,} psi  =  {L["mr_mpa"]:,} MPa\n'
+            f'\u2022 Layer Coefficient (a{ln}) = {a_i:.2f}\n'
+            f'\u2022 Drainage Coefficient (m{ln}) = {m_i:.2f}',
+            space_before=2, space_after=4)
+
+        # การคำนวณ SN
+        _para(doc, 'การคำนวณ SN:', bold=True, space_before=4, space_after=2)
+        _eq_para(doc, f'จากสมการ AASHTO 1993:   SN_{ln} = {sn_at:.2f}',
+                 bold=True, space_before=0, space_after=4)
+
+        # ความหนาขั้นต่ำ
+        _para(doc, 'การคำนวณความหนาขั้นต่ำ:', bold=True, space_before=4, space_after=2)
+        if ln == 1:
+            _eq_para(doc, f'D_{ln} >= SN_{ln} / (a_{ln} \u00d7 m_{ln})',
+                     bold=False, space_before=0, space_after=4)
         else:
-            min_thick_inch = 0.0
-            min_thick_cm   = 0.0
+            _eq_para(doc,
+                f'D_{ln} >= (SN_{ln} \u2212 SN_{ln-1}) / (a_{ln} \u00d7 m_{ln})',
+                bold=False, space_before=0, space_after=4)
 
-        d_cm   = float(layer['thickness_cm'])
-        d_inch = d_cm / 2.54
-        sn_contrib = a_i * d_inch * m_i
-        cumulative_sn += sn_contrib
+        # เลือกใช้ความหนา
+        _para(doc, 'เลือกใช้ความหนา:', bold=True, space_before=4, space_after=2)
+        _eq_para(doc, f'D_{ln}(design)  =  {d_cm:.0f} cm  ({d_in:.2f} in)',
+                 bold=True, italic=False, space_before=0, space_after=4)
 
-        results['layers'].append({
-            'layer_no':              i + 1,
-            'material':              layer['material'],
-            'short_name':            mat['short_name'],
-            'english_name':          mat.get('english_name', mat['short_name']),
-            'mr_psi':                mat['mr_psi'],
-            'mr_mpa':                mat['mr_mpa'],
-            'a_i':                   round(a_i, 3),
-            'm_i':                   round(m_i, 2),
-            'sn_required_at_layer':  round(sn_at_layer, 3),
-            'min_thickness_inch':    round(min_thick_inch, 2),
-            'min_thickness_cm':      round(min_thick_cm,   1),
-            'design_thickness_cm':   d_cm,
-            'design_thickness_inch': round(d_inch, 3),
-            'sn_contribution':       round(sn_contrib, 4),
-            'cumulative_sn':         round(cumulative_sn, 3),
-            'is_ok':                 d_cm >= min_thick_cm,
-            'color':                 mat['color'],
-            'ac_sublayers':          (ac_sublayers if i == 0
-                                      and ac_sublayers is not None else None),
-        })
+        # SN contribution
+        _para(doc, 'SN contribution:', bold=True, space_before=4, space_after=2)
+        _eq_para(doc,
+            f'\u0394SN_{ln} = a_{ln} \u00d7 D_{ln} \u00d7 m_{ln}'
+            f'  =  {a_i:.2f} \u00d7 {d_in:.2f} \u00d7 {m_i:.2f}  =  {sn_cont:.3f}',
+            bold=False, space_before=0, space_after=2)
+        _eq_para(doc, f'\u03a3SN  =  {sn_cum:.2f}',
+                 bold=True, italic=False, space_before=0, space_after=4)
 
-    results['total_sn_provided'] = round(cumulative_sn, 3)
-    return results
+        # สถานะ
+        if is_ok:
+            status_txt = f'\u2713 OK  \u2014  ความหนาเพียงพอ'
+            col = PASS_RGB
+        else:
+            short_need = d_min - d_cm
+            status_txt = f'\u2717 NG  \u2014  ต้องเพิ่มความหนาอีก {short_need:.1f} cm'
+            col = FAIL_RGB
+        p_st = _para(doc, f'สถานะ:  {status_txt}', bold=True,
+                     space_before=4, space_after=4)
+        for r in p_st.runs:
+            r.font.color.rgb = col
 
+    doc.add_paragraph()
 
-def check_sn(sn_required: float | None,
-             sn_provided: float) -> dict:
-    """ตรวจสอบ pass/fail"""
-    if sn_required is None:
-        return {'passed': False, 'safety_margin': 0.0,
-                'message': 'คำนวณ SN_required ไม่ได้'}
-    margin = round(sn_provided - sn_required, 3)
-    passed = sn_provided >= sn_required
-    sym    = '≥' if passed else '<'
-    return {
-        'passed':        passed,
-        'safety_margin': margin,
-        'message':       f'SN_provided ({sn_provided:.2f}) {sym} SN_required ({sn_required:.2f})',
-    }
+    # ══════════════════════════════════════════════════════════
+    # 4.4.5 สรุปการคำนวณ SN
+    # ══════════════════════════════════════════════════════════
+    _heading(doc, s5, 'สรุปการคำนวณ Structural Number', level=3)
+    _para(doc,
+        f'เมื่อได้ทำการคำนวณความหนาของแต่ละชั้นทางตามขั้นตอนที่กล่าวมาข้างต้นแล้ว '
+        f'สามารถสรุปผลการคำนวณ Structural Number ได้ดังตารางที่ {tbl_sn_num}',
+        space_before=4, space_after=4, indent_cm=1.25)
+    _caption(doc, f'ตารางที่ {tbl_sn_num}  {tbl_sn_caption}')
 
-# ============================================================
-# 4. Material Database — ตาม ทล. + V6
-# ============================================================
-MATERIALS = {
-    # ── ผิวทาง ──────────────────────────────────────────────
-    'ผิวทางลาดยาง AC': {
-        'layer_coeff': 0.40, 'drainage_coeff': 1.0,
-        'mr_psi': 362500, 'mr_mpa': 2500,
-        'layer_type': 'surface', 'color': '#1C1C1C',
-        'short_name': 'AC', 'english_name': 'Asphalt Concrete',
-    },
-    'ผิวทางลาดยาง PMA': {
-        'layer_coeff': 0.40, 'drainage_coeff': 1.0,
-        'mr_psi': 536500, 'mr_mpa': 3700,
-        'layer_type': 'surface', 'color': '#2C2C2C',
-        'short_name': 'PMA', 'english_name': 'Polymer Modified Asphalt',
-    },
-    # ── พื้นทาง ─────────────────────────────────────────────
-    'พื้นทางหินคลุกปรับปรุงคุณภาพด้วยปูนซีเมนต์ (Cement Treated Base)': {
-        'layer_coeff': 0.18, 'drainage_coeff': 1.0,
-        'mr_psi': 174000, 'mr_mpa': 1200,
-        'layer_type': 'base', 'color': '#78909C',
-        'short_name': 'CTB', 'english_name': 'Cement Treated Base',
-    },
-    'พื้นทางหินคลุกผสมซีเมนต์ UCS 24.5 ksc.': {
-        'layer_coeff': 0.15, 'drainage_coeff': 1.0,
-        'mr_psi': 123250, 'mr_mpa': 850,
-        'layer_type': 'base', 'color': '#607D8B',
-        'short_name': 'MOD.CRB', 'english_name': 'Mod.Crushed Rock Base',
-    },
-    'พื้นทางหินคลุก CBR 80%': {
-        'layer_coeff': 0.13, 'drainage_coeff': 1.0,
-        'mr_psi': 50750, 'mr_mpa': 350,
-        'layer_type': 'base', 'color': '#795548',
-        'short_name': 'CAB', 'english_name': 'Crushed Rock Base',
-    },
-    'พื้นทางดินซีเมนต์ UCS 17.5 ksc.': {
-        'layer_coeff': 0.13, 'drainage_coeff': 1.0,
-        'mr_psi': 50750, 'mr_mpa': 350,
-        'layer_type': 'base', 'color': '#8D6E63',
-        'short_name': 'SCB', 'english_name': 'Soil Cement Base',
-    },
-    'พื้นทางวัสดุหมุนเวียน (Recycling)': {
-        'layer_coeff': 0.15, 'drainage_coeff': 1.0,
-        'mr_psi': 123250, 'mr_mpa': 850,
-        'layer_type': 'base', 'color': '#5D4037',
-        'short_name': 'RAP', 'english_name': 'Recycled Asphalt Pavement',
-    },
-    # ── รองพื้นทาง ───────────────────────────────────────────
-    'รองพื้นทางวัสดุมวลรวม CBR 25%': {
-        'layer_coeff': 0.10, 'drainage_coeff': 1.0,
-        'mr_psi': 21750, 'mr_mpa': 150,
-        'layer_type': 'subbase', 'color': '#FFB74D',
-        'short_name': 'GSB', 'english_name': 'Aggregate Subbase',
-    },
-    # ── วัสดุคัดเลือก ────────────────────────────────────────
-    'วัสดุคัดเลือก ก': {
-        'layer_coeff': 0.08, 'drainage_coeff': 1.0,
-        'mr_psi': 14504, 'mr_mpa': 100,
-        'layer_type': 'selected', 'color': '#FFF176',
-        'short_name': 'SM-A', 'english_name': 'Selected Material',
-    },
-    # ── ไม่ใช้ ───────────────────────────────────────────────
-    'ไม่ใช้วัสดุคัดเลือก (ใช้ดินทางทรพ)': {
-        'layer_coeff': 0.00, 'drainage_coeff': 1.0,
-        'mr_psi': 0, 'mr_mpa': 0,
-        'layer_type': 'none', 'color': '#D7CCC8',
-        'short_name': 'NONE', 'english_name': 'None',
-    },
-}
+    t3 = doc.add_table(rows=1, cols=8)
+    t3.style = 'Table Grid'
+    t3.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for j, h in enumerate(['ชั้น','วัสดุ','a\u1d62','m\u1d62',
+                            'D\u1d62 (นิ้ว)','D\u1d62 (ซม.)','\u0394SN\u1d62','\u03a3SN']):
+        _cell(t3.rows[0].cells[j], h, bold=True,
+              align=WD_ALIGN_PARAGRAPH.CENTER, shade=HDR_COLOR)
+    for L in layers:
+        row = t3.add_row()
+        _cell(row.cells[0], str(L['layer_no']),                   align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(row.cells[1], _short_mat(L['material']))
+        _cell(row.cells[2], f'{L["a_i"]:.2f}',                   align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(row.cells[3], f'{L["m_i"]:.2f}',                   align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(row.cells[4], f'{L["design_thickness_inch"]:.2f}', align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(row.cells[5], f'{L["design_thickness_cm"]:.0f}',   align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(row.cells[6], f'{L["sn_contribution"]:.3f}',       align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(row.cells[7], f'{L["cumulative_sn"]:.2f}',         align=WD_ALIGN_PARAGRAPH.CENTER)
+    doc.add_paragraph()
 
-MATERIAL_NAMES = [k for k in MATERIALS if k != 'ไม่ใช้วัสดุคัดเลือก (ใช้ดินทางทรพ)']
-MATERIAL_NAMES_WITH_NONE = list(MATERIALS.keys())
+    # ── ผลการตรวจสอบ ──────────────────────────────────────────
+    _para(doc, 'ผลการตรวจสอบการออกแบบ', bold=True,
+          space_before=4, space_after=4)
 
-# ── ชื่อย่อสำหรับรายงาน ──────────────────────────────────────
-SHORT_NAME_MAP = {
-    'พื้นทางหินคลุกปรับปรุงคุณภาพด้วยปูนซีเมนต์ (Cement Treated Base)':
-        'หินคลุกปรับปรุงคุณภาพด้วยปูนซีเมนต์ (CTB)',
-    'พื้นทางหินคลุกผสมซีเมนต์ UCS 24.5 ksc.': 'หินคลุกผสมซีเมนต์ UCS ≥ 24.5 ksc',
-    'พื้นทางหินคลุก CBR 80%':                  'หินคลุก CBR ≥ 80%',
-    'พื้นทางดินซีเมนต์ UCS 17.5 ksc.':         'ดินซีเมนต์ UCS ≥ 17.5 ksc',
-    'พื้นทางวัสดุหมุนเวียน (Recycling)':        'วัสดุหมุนเวียน (Recycling)',
-    'รองพื้นทางวัสดุมวลรวม CBR 25%':            'รองพื้นทางวัสดุมวลรวม CBR ≥ 25%',
-    'ผิวทางลาดยาง AC':                          'ผิวทางลาดยาง AC',
-    'ผิวทางลาดยาง PMA':                         'ผิวทางลาดยาง PMA',
-    'วัสดุคัดเลือก ก':                          'วัสดุคัดเลือก ก',
-}
+    result_rows = [
+        ('SN Required (จากสมการ AASHTO)', f'{sn_req:.2f}'),
+        ('SN Provided (จากชั้นทาง)',       f'{sn_prov:.2f}'),
+        ('Safety Margin (SN_provided \u2212 SN_required)', f'{margin:+.3f}'),
+        ('Ratio (SN_provided / SN_required)', f'{ratio:.3f}'),
+        ('ผลการตรวจสอบ', 'ผ่าน (OK)' if passed else 'ไม่ผ่าน (NG)'),
+    ]
+    t4 = doc.add_table(rows=len(result_rows), cols=2)
+    t4.style = 'Table Grid'
+    t4.alignment = WD_TABLE_ALIGNMENT.LEFT
+    for i, (param, val) in enumerate(result_rows):
+        is_last  = (i == len(result_rows) - 1)
+        col      = (PASS_RGB if passed else FAIL_RGB) if is_last else None
+        _cell(t4.rows[i].cells[0], param, bold=is_last)
+        _cell(t4.rows[i].cells[1], val,
+              align=WD_ALIGN_PARAGRAPH.CENTER,
+              bold=is_last, color=col)
+        if is_last:
+            sh = 'C6EFCE' if passed else 'FFC7CE'
+            _hdr_shade(t4.rows[i].cells[0], sh)
+            _hdr_shade(t4.rows[i].cells[1], sh)
+    doc.add_paragraph()
 
-def short_name(mat: str) -> str:
-    return SHORT_NAME_MAP.get(mat, mat)
-
-# ============================================================
-# 5. Preset Structures — ทล.
-# ============================================================
-PRESETS = {
-    '— เลือกโครงสร้างมาตรฐาน —': None,
-    'AC + CTB + GSB + SM (มาตรฐานหลัก)': {
-        'description': 'ผิวทาง AC / พื้นทาง CTB / รองพื้นทาง GSB / วัสดุคัดเลือก',
-        'layers': [
-            {'material': 'ผิวทางลาดยาง AC', 'thickness_cm': 15.0},
-            {'material': 'พื้นทางหินคลุกปรับปรุงคุณภาพด้วยปูนซีเมนต์ (Cement Treated Base)',
-             'thickness_cm': 15.0},
-            {'material': 'รองพื้นทางวัสดุมวลรวม CBR 25%', 'thickness_cm': 15.0},
-            {'material': 'วัสดุคัดเลือก ก', 'thickness_cm': 30.0},
-        ],
-    },
-    'AC + MOD.CRB + GSB + SM': {
-        'description': 'ผิวทาง AC / หินคลุกผสมซีเมนต์ / รองพื้นทาง GSB / วัสดุคัดเลือก',
-        'layers': [
-            {'material': 'ผิวทางลาดยาง AC', 'thickness_cm': 15.0},
-            {'material': 'พื้นทางหินคลุกผสมซีเมนต์ UCS 24.5 ksc.', 'thickness_cm': 20.0},
-            {'material': 'รองพื้นทางวัสดุมวลรวม CBR 25%', 'thickness_cm': 15.0},
-            {'material': 'วัสดุคัดเลือก ก', 'thickness_cm': 30.0},
-        ],
-    },
-    'AC + CAB + GSB + SM': {
-        'description': 'ผิวทาง AC / หินคลุก CBR 80% / รองพื้นทาง GSB / วัสดุคัดเลือก',
-        'layers': [
-            {'material': 'ผิวทางลาดยาง AC', 'thickness_cm': 15.0},
-            {'material': 'พื้นทางหินคลุก CBR 80%', 'thickness_cm': 20.0},
-            {'material': 'รองพื้นทางวัสดุมวลรวม CBR 25%', 'thickness_cm': 15.0},
-            {'material': 'วัสดุคัดเลือก ก', 'thickness_cm': 30.0},
-        ],
-    },
-    'AC + SCB + GSB + SM': {
-        'description': 'ผิวทาง AC / ดินซีเมนต์ / รองพื้นทาง GSB / วัสดุคัดเลือก',
-        'layers': [
-            {'material': 'ผิวทางลาดยาง AC', 'thickness_cm': 15.0},
-            {'material': 'พื้นทางดินซีเมนต์ UCS 17.5 ksc.', 'thickness_cm': 20.0},
-            {'material': 'รองพื้นทางวัสดุมวลรวม CBR 25%', 'thickness_cm': 15.0},
-            {'material': 'วัสดุคัดเลือก ก', 'thickness_cm': 30.0},
-        ],
-    },
-    'AC + CTB + GSB (ไม่ใช้ SM)': {
-        'description': 'ผิวทาง AC / พื้นทาง CTB / รองพื้นทาง GSB',
-        'layers': [
-            {'material': 'ผิวทางลาดยาง AC', 'thickness_cm': 15.0},
-            {'material': 'พื้นทางหินคลุกปรับปรุงคุณภาพด้วยปูนซีเมนต์ (Cement Treated Base)',
-             'thickness_cm': 20.0},
-            {'material': 'รองพื้นทางวัสดุมวลรวม CBR 25%', 'thickness_cm': 20.0},
-        ],
-    },
-    'PMA + CTB + GSB + SM': {
-        'description': 'ผิวทาง PMA / พื้นทาง CTB / รองพื้นทาง GSB / วัสดุคัดเลือก',
-        'layers': [
-            {'material': 'ผิวทางลาดยาง PMA', 'thickness_cm': 15.0},
-            {'material': 'พื้นทางหินคลุกปรับปรุงคุณภาพด้วยปูนซีเมนต์ (Cement Treated Base)',
-             'thickness_cm': 15.0},
-            {'material': 'รองพื้นทางวัสดุมวลรวม CBR 25%', 'thickness_cm': 15.0},
-            {'material': 'วัสดุคัดเลือก ก', 'thickness_cm': 30.0},
-        ],
-    },
-    'AC + RAP + GSB + SM': {
-        'description': 'ผิวทาง AC / วัสดุหมุนเวียน / รองพื้นทาง GSB / วัสดุคัดเลือก',
-        'layers': [
-            {'material': 'ผิวทางลาดยาง AC', 'thickness_cm': 15.0},
-            {'material': 'พื้นทางวัสดุหมุนเวียน (Recycling)', 'thickness_cm': 20.0},
-            {'material': 'รองพื้นทางวัสดุมวลรวม CBR 25%', 'thickness_cm': 15.0},
-            {'material': 'วัสดุคัดเลือก ก', 'thickness_cm': 30.0},
-        ],
-    },
-}
-
-# ============================================================
-# 6. Drainage Table
-# ============================================================
-DRAINAGE_TABLE = {
-    'Excellent': {
-        'description': 'ระบายน้ำดีเยี่ยม (< 2 ชม.)',
-        'values': {'<1%': 1.40, '1-5%': 1.35, '5-25%': 1.30, '>25%': 1.20},
-    },
-    'Good': {
-        'description': 'ระบายน้ำดี (1 วัน)',
-        'values': {'<1%': 1.35, '1-5%': 1.25, '5-25%': 1.15, '>25%': 1.00},
-    },
-    'Fair': {
-        'description': 'ระบายน้ำพอใช้ (1 สัปดาห์)',
-        'values': {'<1%': 1.25, '1-5%': 1.15, '5-25%': 1.05, '>25%': 0.80},
-    },
-    'Poor': {
-        'description': 'ระบายน้ำไม่ดี (1 เดือน)',
-        'values': {'<1%': 1.15, '1-5%': 1.05, '5-25%': 0.80, '>25%': 0.60},
-    },
-    'Very Poor': {
-        'description': 'ระบายน้ำไม่ดีมาก (ไม่ระบาย)',
-        'values': {'<1%': 1.05, '1-5%': 0.80, '5-25%': 0.60, '>25%': 0.40},
-    },
-}
-
-# ============================================================
-# 7. ESAL Engine (Flexible) — LEF ตาม AASHTO 1993
-# ============================================================
-_TON_TO_KIP = 2.2046
-
-_VEHICLE_AXLES = {
-    'MB':  [(4,  1, 1), (11, 1, 1)],
-    'HB':  [(5,  1, 1), (20, 2, 1)],
-    'MT':  [(4,  1, 1), (11, 1, 1)],
-    'HT':  [(5,  1, 1), (20, 2, 1)],
-    'TR':  [(5,  1, 1), (20, 2, 1), (11, 1, 1), (11, 1, 1)],
-    'STR': [(5,  1, 1), (20, 2, 1), (20, 2, 1)],
-}
-
-
-def _ealf_flex(L1_ton: float, L2: int, SN: float, pt: float) -> float:
-    """
-    EALF สำหรับ Flexible Pavement (AASHTO 1993 Appendix D)
-    L1_ton: น้ำหนักเพลา (ตัน), L2: axle type factor,
-    SN: Structural Number, pt: terminal serviceability
-    """
-    L1  = L1_ton * _TON_TO_KIP  # kip
-    Gt  = math.log10((4.2 - pt) / (4.2 - 1.5))   # Flexible: 4.2 (ไม่ใช่ 4.5 ของ Rigid)
-    Bx  = 0.4 + 0.081 * (L1 + L2) ** 3.23 / ((SN + 1) ** 5.19 * L2 ** 3.23)
-    B18 = 0.4 + 0.081 * (18 + 1) ** 3.23 / ((SN + 1) ** 5.19 * 1.0 ** 3.23)
-    return 10 ** (4.79 * math.log10(L1 + L2)
-                  - 4.79 * math.log10(19)
-                  - 4.33 * math.log10(L2)
-                  + Gt * (1 / B18 - 1 / Bx))
-
-
-def compute_esal_flex(traffic_data: list, pt: float,
-                      lane_factor: float, direction_factor: float,
-                      SN: float) -> tuple[int, dict]:
-    """
-    คำนวณ W18 สะสมสำหรับ Flexible Pavement
-    return: (W18_total, truck_factors)
-    """
-    tf = {
-        code: sum(
-            _ealf_flex(L1, L2, SN, pt) * cnt
-            for L1, L2, cnt in axles
-        )
-        for code, axles in _VEHICLE_AXLES.items()
-    }
-    acc = sum(
-        row.get(code, 0) * tf[code] * lane_factor * direction_factor * 365
-        for row in traffic_data
-        for code in tf
+    # สรุป
+    summary = (
+        f'สรุป: การออกแบบผ่านเกณฑ์ เนื่องจาก SN_provided ({sn_prov:.2f}) '
+        f'\u2265 SN_required ({sn_req:.2f})'
+        if passed else
+        f'สรุป: การออกแบบไม่ผ่านเกณฑ์ เนื่องจาก SN_provided ({sn_prov:.2f}) '
+        f'< SN_required ({sn_req:.2f}) กรุณาปรับเพิ่มความหนาชั้นทาง'
     )
-    return (round(acc), tf)
+    _para(doc, summary, bold=True,
+          color=PASS_RGB if passed else FAIL_RGB,
+          space_before=4, space_after=4)
+    doc.add_paragraph()
 
-# ============================================================
-# 8. Visualization — Cross-section
-# ============================================================
-_LAYER_COLORS = {
-    'ผิวทางลาดยาง AC':    '#1C1C1C',
-    'ผิวทางลาดยาง PMA':   '#2C2C2C',
-    'พื้นทางหินคลุกปรับปรุงคุณภาพด้วยปูนซีเมนต์ (Cement Treated Base)': '#78909C',
-    'พื้นทางหินคลุกผสมซีเมนต์ UCS 24.5 ksc.': '#607D8B',
-    'พื้นทางหินคลุก CBR 80%':                  '#795548',
-    'พื้นทางดินซีเมนต์ UCS 17.5 ksc.':         '#8D6E63',
-    'พื้นทางวัสดุหมุนเวียน (Recycling)':        '#5D4037',
-    'รองพื้นทางวัสดุมวลรวม CBR 25%':            '#FFB74D',
-    'วัสดุคัดเลือก ก':                          '#FFF176',
-    'ดินเดิม / Subgrade':                       '#BCAAA4',
-}
-_DARK_LAYERS = {'ผิวทางลาดยาง AC', 'ผิวทางลาดยาง PMA',
-                'พื้นทางหินคลุกปรับปรุงคุณภาพด้วยปูนซีเมนต์ (Cement Treated Base)',
-                'พื้นทางหินคลุกผสมซีเมนต์ UCS 24.5 ksc.',
-                'พื้นทางวัสดุหมุนเวียน (Recycling)'}
+    # ── ตารางสรุปโครงสร้างชั้นทาง + รูปตัดขวาง (merge ในเซลล์แรก) ──
+    _caption(doc, f'รูปที่ {fig_num}  {fig_caption}')
+    _caption(doc, f'ตารางที่ {tbl_sn_num}  {tbl_sn_caption}')
 
+    # เตรียม png bytes ของรูป (ถ้ามี)
+    _fig_buf = None
+    if fig is not None:
+        try:
+            import matplotlib.pyplot as plt
+            _b = BytesIO()
+            fig.savefig(_b, format='png', dpi=150,
+                        bbox_inches='tight', facecolor='white')
+            _b.seek(0)
+            _fig_buf = _b
+            plt.close(fig)
+        except Exception:
+            _fig_buf = None
 
-def plot_flex_structure(layer_results: list, subgrade_cbr: float | None = None,
-                        title: str = 'Flexible Pavement Structure') -> plt.Figure:
-    """วาดรูปตัดขวางโครงสร้าง Flexible Pavement
-    subgrade_cbr=None → ไม่แสดงชั้น Subgrade
-    """
-    valid = [l for l in layer_results if l.get('design_thickness_cm', 0) > 0]
-    if not valid:
-        fig, ax = plt.subplots(figsize=(7, 4))
-        ax.text(0.5, 0.5, 'No valid layers', ha='center', va='center')
-        ax.axis('off')
-        return fig
+    # สร้างตาราง: header row + n layer rows + 1 subgrade row
+    n_data_rows = len(layers) + 1          # layers + subgrade
+    t5 = doc.add_table(rows=1 + n_data_rows, cols=3)
+    t5.style = 'Table Grid'
+    t5.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    # เพิ่มชั้น subgrade ถ้าระบุ CBR
-    if subgrade_cbr is not None:
-        display_layers = valid + [{
-            'material':             'ดินเดิม / Subgrade',
-            'design_thickness_cm':  30,
-            'a_i': 0, 'm_i': 1.0, 'sn_contribution': 0,
-            'cumulative_sn': 0,
-            'short_name': f'Subgrade (CBR={subgrade_cbr:.1f}%)',
-            'mr_psi': 0, 'mr_mpa': 0,
-        }]
-    else:
-        display_layers = valid
+    # ── Header row ──
+    for j, h in enumerate(['รายละเอียด', 'หนา (ซม.)', 'ชนิดวัสดุ']):
+        _cell(t5.rows[0].cells[j], h, bold=True,
+              align=WD_ALIGN_PARAGRAPH.CENTER, shade=HDR_COLOR)
 
-    total = sum(l['design_thickness_cm'] for l in display_layers)
-    min_disp = max(total * 0.07, 5)
-    disp = [max(l['design_thickness_cm'], min_disp) for l in display_layers]
-    scale = total / sum(disp)
-    disp = [d * scale for d in disp]
-    tot_d = sum(disp)
+    # ── Data rows (layers) ──
+    for idx, L in enumerate(layers):
+        row = t5.rows[1 + idx]
+        _cell(row.cells[0], '')           # จะ vMerge ทีหลัง
+        _cell(row.cells[1], f'{L["design_thickness_cm"]:.0f}',
+              align=WD_ALIGN_PARAGRAPH.CENTER)
+        from flex_engine import MATERIALS as _MAT
+        _eng = _MAT.get(L['material'], {}).get('english_name', _short_mat(L['material']))
+        _cell(row.cells[2], _eng)
 
-    fig_h = max(5, min(10, total / 12))
-    fig, ax = plt.subplots(figsize=(8, fig_h))
-    fig.patch.set_facecolor('white')
-    ax.set_facecolor('white')
+    # ── Subgrade row ──
+    sub_row = t5.rows[1 + len(layers)]
+    _cell(sub_row.cells[0], '')           # จะ vMerge ทีหลัง
+    _cell(sub_row.cells[1], 'Existing', align=WD_ALIGN_PARAGRAPH.CENTER)
+    _cell(sub_row.cells[2],
+          f'Earth Embankment / Subgrade\nCBR\u2265{cbr:.1f} %')
 
-    w, xc = 3.5, 6
-    xs_l = xc - w / 2
-    y = tot_d
+    # ── vMerge เซลล์แรกของแถวข้อมูลทั้งหมด (แถว 1 ถึง n_data_rows) ──
+    def _vmerge_start(cell):
+        """กำหนดให้ cell เป็นจุดเริ่ม vMerge"""
+        tc   = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        vm   = OxmlElement('w:vMerge')
+        vm.set(qn('w:val'), 'restart')
+        tcPr.append(vm)
 
-    for i, layer in enumerate(display_layers):
-        t   = layer['design_thickness_cm']
-        n   = layer['material']
-        dh  = disp[i]
-        yb  = y - dh
-        col = _LAYER_COLORS.get(n, '#CCCCCC')
-        ax.add_patch(patches.Rectangle(
-            (xs_l, yb), w, dh, lw=1.5, ec='black', fc=col))
+    def _vmerge_cont(cell):
+        """กำหนดให้ cell ต่อเนื่องจาก vMerge"""
+        tc   = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        vm   = OxmlElement('w:vMerge')
+        # ไม่ set val = ต่อเนื่อง
+        tcPr.append(vm)
 
-        yc  = yb + dh / 2
-        tc  = 'white' if n in _DARK_LAYERS else 'black'
-        fs_v = max(8, min(13, dh * 0.55))
-        fs_l = max(7, min(11, dh * 0.45))
+    _vmerge_start(t5.rows[1].cells[0])
+    for r_idx in range(2, 1 + n_data_rows):
+        _vmerge_cont(t5.rows[r_idx].cells[0])
 
-        # ชื่อเต็ม english (ซ้าย)
-        sn_label = (layer.get('english_name') or
-                    MATERIALS.get(n, {}).get('english_name',
-                    layer.get('short_name', n[:8])))
-        ax.text(xs_l - 0.3, yc, sn_label,
-                ha='right', va='center', fontsize=fs_l, fontweight='bold')
+    # ── แทรกรูปในเซลล์แรกของแถวที่ 1 (vMerge restart) ──
+    first_cell = t5.rows[1].cells[0]
+    first_cell.text = ''
+    p_img = first_cell.paragraphs[0]
+    p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if _fig_buf is not None:
+        try:
+            r_img = p_img.add_run()
+            r_img.add_picture(_fig_buf, width=Inches(2.2))
+        except Exception as e:
+            r_img = p_img.add_run(f'[รูปไม่แสดง: {e}]')
+            _tf(r_img, FN, FS - 2)
 
-        # ความหนา (กลาง)
-        ax.text(xc, yc, f'{t:.0f} cm',
-                ha='center', va='center', fontsize=fs_v,
-                fontweight='bold', color=tc)
+    doc.add_paragraph()
 
-        # SN contribution (ขวา) — ไม่แสดงสำหรับ subgrade
-        if layer.get('sn_contribution', 0) > 0:
-            ax.text(xs_l + w + 0.3, yc,
-                    f'ΔSN = {layer["sn_contribution"]:.3f}',
-                    ha='left', va='center', fontsize=max(7, fs_l - 1),
-                    color='#1565C0')
-        elif n == 'ดินเดิม / Subgrade':
-            ax.text(xs_l + w + 0.3, yc,
-                    f'CBR = {subgrade_cbr:.1f}%',
-                    ha='left', va='center', fontsize=max(7, fs_l - 1),
-                    color='#5D4037')
-        y = yb
+    # ── Footer ────────────────────────────────────────────────
+    _para(doc,
+        f'พัฒนาโดย รศ.ดร.อิทธิพล มีผล \u00b7 ภาควิชาครุศาสตร์โยธา \u00b7 มจพ. \u00b7 '
+        'Flexible Pavement Design V1 \u00b7 AASHTO 1993',
+        size=12, align=WD_ALIGN_PARAGRAPH.CENTER,
+        space_before=6, space_after=0)
 
-    # arrow total (ไม่รวม subgrade)
-    valid_total = sum(l['design_thickness_cm'] for l in valid)
-    y_top = tot_d
-    y_bot = tot_d - sum(disp[:len(valid)])
-    ax.annotate('', xy=(xs_l + w + 3.5, y_bot),
-                xytext=(xs_l + w + 3.5, y_top),
-                arrowprops=dict(arrowstyle='<->', color='red', lw=2))
-    ax.text(xs_l + w + 4.0, (y_top + y_bot) / 2,
-            f'รวม\n{valid_total:.0f} cm',
-            ha='left', va='center', fontsize=11,
-            color='red', fontweight='bold')
-
-    mg = total * 0.06
-    ax.set_xlim(0, 14)
-    ax.set_ylim(-mg, tot_d + mg)
-    ax.axis('off')
-    ax.set_title(title, fontsize=13, fontweight='bold', pad=10)
-    plt.tight_layout()
-    return fig
-
-
-def plot_sensitivity_cbr(W18: float, Zr: float, So: float,
-                         delta_psi: float, current_cbr: float) -> plt.Figure:
-    """Sensitivity: SN required vs CBR"""
-    cbr_range = np.linspace(2, 20, 60)
-    sn_vals   = []
-    for cbr in cbr_range:
-        mr  = mr_from_cbr(cbr)
-        sn  = calc_sn_required(W18, Zr, So, delta_psi, mr)
-        sn_vals.append(sn if sn else np.nan)
-
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(cbr_range, sn_vals, 'b-', lw=2.5, label='SN required')
-
-    c_mr = mr_from_cbr(current_cbr)
-    c_sn = calc_sn_required(W18, Zr, So, delta_psi, c_mr)
-    if c_sn:
-        ax.plot(current_cbr, c_sn, 'ro', ms=10,
-                label=f'CBR={current_cbr:.1f}%, SN={c_sn:.2f}')
-        ax.annotate(f'CBR={current_cbr:.1f}%\nSN={c_sn:.2f}',
-                    xy=(current_cbr, c_sn),
-                    xytext=(current_cbr + 1.5, c_sn + 0.3),
-                    fontsize=9, color='red',
-                    arrowprops=dict(arrowstyle='->', color='red', lw=1.2))
-
-    ax.set_xlabel('CBR (%)', fontsize=11)
-    ax.set_ylabel('SN Required', fontsize=11)
-    ax.set_title('Sensitivity: SN Required vs CBR', fontsize=11, fontweight='bold')
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.3)
-    ax.set_xlim(left=2)
-    plt.tight_layout()
-    return fig
-
-
-def plot_sensitivity_w18(Zr: float, So: float, delta_psi: float,
-                         Mr: float, current_w18: float) -> plt.Figure:
-    """Sensitivity: SN required vs W18"""
-    w18_range = np.logspace(5, 8.5, 60)
-    sn_vals   = [calc_sn_required(w, Zr, So, delta_psi, Mr) or np.nan
-                 for w in w18_range]
-
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.semilogx(w18_range, sn_vals, 'g-', lw=2.5, label='SN required')
-
-    c_sn = calc_sn_required(current_w18, Zr, So, delta_psi, Mr)
-    if c_sn:
-        ax.semilogx(current_w18, c_sn, 'ro', ms=10,
-                    label=f'W18={current_w18/1e6:.2f}M, SN={c_sn:.2f}')
-        ax.annotate(f'W18={current_w18/1e6:.2f}M\nSN={c_sn:.2f}',
-                    xy=(current_w18, c_sn),
-                    xytext=(current_w18 * 0.15, c_sn + 0.4),
-                    fontsize=9, color='red',
-                    arrowprops=dict(arrowstyle='->', color='red', lw=1.2))
-
-    ax.set_xlabel('W18 (ESALs)', fontsize=11)
-    ax.set_ylabel('SN Required', fontsize=11)
-    ax.set_title('Sensitivity: SN Required vs W18', fontsize=11, fontweight='bold')
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    return fig
-
-
-def fig_to_bytes(fig: plt.Figure) -> bytes:
-    buf = BytesIO()
-    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-    buf.seek(0)
-    return buf.read()
-
-# ============================================================
-# 9. W18–SN Mapping Table (สำหรับ JSON mode)
-# ============================================================
-
-# SN ที่ใช้คำนวณ mapping — ครอบคลุมช่วง Flexible จริง
-_SN_GRID = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5,
-            6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0]
-
-
-def compute_w18_sn_table(traffic_data: list, pt: float,
-                         lane_factor: float, direction_factor: float,
-                         sn_grid: list | None = None) -> list[dict]:
-    """
-    คำนวณ W18 ที่ SN แต่ละค่าใน sn_grid
-    return: list of {'SN': float, 'W18': int}
-    """
-    grid = sn_grid if sn_grid is not None else _SN_GRID
-    rows = []
-    for sn in grid:
-        w18, _ = compute_esal_flex(traffic_data, pt, lane_factor,
-                                   direction_factor, SN=sn)
-        rows.append({'SN': sn, 'W18': w18})
-    return rows
+    buf_out = BytesIO()
+    doc.save(buf_out)
+    buf_out.seek(0)
+    return buf_out
