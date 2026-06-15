@@ -540,9 +540,7 @@ def create_flex_word_report(
         _cell(row.cells[0], '')           # จะ vMerge ทีหลัง
         _cell(row.cells[1], f'{L["design_thickness_cm"]:.0f}',
               align=WD_ALIGN_PARAGRAPH.CENTER)
-        from flex_engine import MATERIALS as _MAT
-        _eng = _MAT.get(L['material'], {}).get('english_name', _short_mat(L['material']))
-        _cell(row.cells[2], _eng)
+        _cell(row.cells[2], _short_mat(L['material']))
 
     # ── Subgrade row ──
     sub_row = t5.rows[1 + len(layers)]
